@@ -38,7 +38,6 @@ const navigation: { label: View; icon: typeof LayoutDashboard; group: string }[]
   { label: "People", icon: Users, group: "Workspace" },
   { label: "Academics", icon: GraduationCap, group: "Workspace" },
   { label: "Attendance", icon: UserCheck, group: "Workspace" },
-  { label: "Finance", icon: WalletCards, group: "Workspace" },
   { label: "Timetable Generator", icon: CalendarDays, group: "School Operations" },
   { label: "Reports", icon: FileText, group: "Workspace" },
   { label: "Administration", icon: Settings2, group: "Workspace" },
