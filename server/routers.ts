@@ -75,6 +75,7 @@ import {
   saveGuardian,
   setUserPermission,
 } from "./smis-extension";
+import { loadResourcesFinance, saveResourcesFinance } from "./resources-finance";
 
 const currentUserId = (user: { id: number }) => user.id;
 const permissionProcedure = (permission: string) => protectedProcedure.use(async ({ ctx, next }) => {
@@ -114,7 +115,7 @@ export const appRouter = router({
     adminResetPassword: permissionProcedure("users.edit").input(z.object({ userId: z.number().int().positive() })).mutation(({ input, ctx }) => adminResetIamPassword(input.userId, ctx.user.id, ctx.req)),
   }),
   smis: router({
-    health: publicProcedure.query(() => ({ ok: true, service: "kenyan-smis", persistence: "mysql-drizzle", modules: ["learners", "attendance", "assessments", "reports", "finance", "store", "timetable", "communication", "alumni", "users", "settings", "audit"] })),
+    health: publicProcedure.query(() => ({ ok: true, service: "kenyan-smis", persistence: "mysql-drizzle", modules: ["learners", "attendance", "assessments", "reports", "finance", "resources-finance", "store", "timetable", "communication", "alumni", "users", "settings", "audit"] })),
     snapshot: permissionProcedure("dashboard.view").query(() => getDashboardSnapshot()),
     learners: router({
       list: permissionProcedure("learners.view").input(z.object({ search: z.string().optional() }).optional()).query(({ input }) => listLearners(input?.search)),
@@ -154,6 +155,10 @@ export const appRouter = router({
       summary: permissionProcedure("finance.view").query(() => financialSummary()),
       expenditures: permissionProcedure("finance.view").query(() => listExpenditures()),
       recordExpenditure: permissionProcedure("finance.edit").input(z.object({ expenditureDate: z.string(), amount: z.number().positive(), category: z.string().min(1).max(120), description: z.string().min(1).max(255), responsiblePerson: z.string().min(1).max(160) })).mutation(({ input, ctx }) => recordExpenditure(input, currentUserId(ctx.user))),
+    }),
+    resourcesFinance: router({
+      get: protectedProcedure.query(({ ctx }) => loadResourcesFinance(ctx.user.id, ctx.user.role)),
+      save: protectedProcedure.input(z.object({ data: z.string().min(1).max(1_500_000), version: z.number().int().nonnegative() })).mutation(({ input, ctx }) => saveResourcesFinance(input, ctx.user.id, ctx.user.role)),
     }),
     people: router({
       catalog: permissionProcedure("learners.view").query(() => listAcademicCatalog()),

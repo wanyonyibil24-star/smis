@@ -134,6 +134,13 @@
       "when": 1790513886423,
       "tag": "0018_romantic_shinobi_shaw",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "5",
+      "when": 1790662320665,
+      "tag": "0019_wild_may_parker",
+      "breakpoints": true
     }
   ]
 }

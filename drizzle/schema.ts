@@ -3,6 +3,7 @@ import {
   date,
   decimal,
   int,
+  longtext,
   mysqlEnum,
   mysqlTable,
   text,
@@ -333,3 +334,11 @@ export type Learner = typeof learners.$inferSelect;
 export type Attendance = typeof attendances.$inferSelect;
 export type Mark = typeof marks.$inferSelect;
 export type Payment = typeof payments.$inferSelect;
+
+export const resourcesFinanceState = mysqlTable("resources_finance_state", {
+  id: int("id").primaryKey(),
+  data: longtext("data").notNull(),
+  version: int("version").notNull().default(1),
+  updatedByUserId: int("updatedByUserId"),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull().onUpdateNow(),
+});
