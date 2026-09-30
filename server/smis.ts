@@ -22,8 +22,6 @@ import {
   permissions,
   schoolSettings,
   staffProfiles,
-  storeItems,
-  storeMovements,
   subjects,
   teacherAllocations,
   timetableEntries,
@@ -110,14 +108,12 @@ export async function getSettings() {
 
 export async function getDashboardSnapshot() {
   const db = await requireDb();
-  const [settings, learnerRows, attendanceRows, paymentRows, assessmentRows, staffRows, lowStockRows] = await Promise.all([
+  const [settings, learnerRows, attendanceRows, assessmentRows, staffRows] = await Promise.all([
     getSettings(),
     db.select({ learner: learners, grade: grades }).from(learners).leftJoin(grades, eq(grades.id, learners.gradeId)).where(eq(learners.status, "active")),
     db.select().from(attendances).orderBy(desc(attendances.id)).limit(100),
-    db.select().from(payments).orderBy(desc(payments.paidAt)).limit(100),
     db.select().from(assessments).where(sql`${assessments.status} <> 'approved'`),
     db.select().from(staffProfiles).where(eq(staffProfiles.status, "active")),
-    db.select({ item: storeItems, movement: storeMovements }).from(storeItems).leftJoin(storeMovements, eq(storeItems.id, storeMovements.itemId)),
   ]);
   const attendanceToday = attendanceRows.filter(row => String(row.attendanceDate) === new Date().toISOString().slice(0, 10));
   const present = attendanceToday.filter(row => row.status === "present").length;
@@ -127,20 +123,11 @@ export async function getDashboardSnapshot() {
     const row = learnersById.get(attendance.learnerId);
     return row ? [{ attendance, learner: row.learner, grade: row.grade }] : [];
   });
-  const collections = paymentRows.reduce((sum, row) => sum + Number(row.amount), 0);
-  const stock = new Map<number, { name: string; unit: string; quantity: number; reorderLevel: number }>();
-  for (const row of lowStockRows) {
-    if (!row.item) continue;
-    const current = stock.get(row.item.id) ?? { name: row.item.name, unit: row.item.unit, quantity: 0, reorderLevel: Number(row.item.reorderLevel) };
-    if (row.movement) current.quantity += row.movement.movementType === "issued" ? -Number(row.movement.quantity) : Number(row.movement.quantity);
-    stock.set(row.item.id, current);
-  }
   return {
     school: settings,
-    counts: { learners: learnerRows.length, staff: staffRows.length, assessmentsPending: assessmentRows.length, collections },
+    counts: { learners: learnerRows.length, staff: staffRows.length, assessmentsPending: assessmentRows.length },
     attendance: { today: attendanceToday.length, present, rate: attendanceRate },
     recentAttendance,
-    lowStock: Array.from(stock.values()).filter(item => item.quantity <= item.reorderLevel),
     recentLearners: learnerRows.slice(0, 8).map(row => ({ ...row.learner, grade: row.grade ? `${row.grade.name}${row.grade.stream ? ` ${row.grade.stream}` : ""}` : "" })),
   };
 }
@@ -469,35 +456,6 @@ export async function getFinanceOverview(learnerId?: number) {
     return { learner, required, paid, balance: required - paid };
   });
   return { balances: byLearner, payments: paymentRows.slice(0, 50), totals: { required: byLearner.reduce((s, row) => s + row.required, 0), paid: byLearner.reduce((s, row) => s + row.paid, 0) } };
-}
-
-export async function recordPayment(input: { learnerId: number; amount: number; paymentMethod: "mpesa" | "bank" | "cash"; reference: string }, userId: number) {
-  const db = await requireDb();
-  if (input.amount <= 0) throw new Error("INVALID_AMOUNT");
-  await db.insert(payments).values({ ...input, amount: String(input.amount) });
-  await writeAudit(userId, "finance.payment", "payment", input.reference, input);
-  return { ok: true, reference: input.reference };
-}
-
-export async function getStoreOverview() {
-  const db = await requireDb();
-  const rows = await db.select({ item: storeItems, movement: storeMovements }).from(storeItems).leftJoin(storeMovements, eq(storeItems.id, storeMovements.itemId));
-  const items = new Map<number, { id: number; name: string; unit: string; reorderLevel: number; quantity: number }>();
-  for (const row of rows) {
-    if (!row.item) continue;
-    const item = items.get(row.item.id) ?? { id: row.item.id, name: row.item.name, unit: row.item.unit, reorderLevel: Number(row.item.reorderLevel), quantity: 0 };
-    if (row.movement) item.quantity += row.movement.movementType === "issued" ? -Number(row.movement.quantity) : Number(row.movement.quantity);
-    items.set(row.item.id, item);
-  }
-  return Array.from(items.values());
-}
-
-export async function recordStoreMovement(input: { itemId: number; movementType: "received" | "issued" | "adjustment"; quantity: number; reference?: string | null }, userId: number) {
-  const db = await requireDb();
-  if (input.quantity <= 0) throw new Error("INVALID_QUANTITY");
-  await db.insert(storeMovements).values({ ...input, quantity: String(input.quantity) });
-  await writeAudit(userId, "store.movement", "store_item", input.itemId, input);
-  return { ok: true };
 }
 
 export async function listTimetable() {

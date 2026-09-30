@@ -1,6 +1,6 @@
 import { desc, eq, like } from "drizzle-orm";
 import { getDb } from "./db";
-import { expenditures, guardians, learnerGuardians, notifications, permissions, userPermissions } from "../drizzle/schema";
+import { guardians, learnerGuardians, notifications, permissions, userPermissions } from "../drizzle/schema";
 import { effectivePermissions, permissionCatalog, requireDb, writeAudit } from "./smis";
 import { attendances, learners, marks, feeStructures, payments, storeItems, storeMovements, subjects, grades } from "../drizzle/schema";
 
@@ -15,25 +15,6 @@ export async function saveGuardian(input: { fullName: string; phone?: string | n
   if (input.learnerId) await db.insert(learnerGuardians).values({ learnerId: input.learnerId, guardianId, relationship: input.relationship || "Guardian", isPrimary: 1 });
   await writeAudit(userId, "guardian.create", "guardian", guardianId, input);
   return { id: guardianId };
-}
-
-export async function listExpenditures() {
-  const db = await requireDb();
-  return db.select().from(expenditures).orderBy(desc(expenditures.expenditureDate)).limit(100);
-}
-
-export async function recordExpenditure(input: { expenditureDate: string; amount: number; category: string; description: string; responsiblePerson: string }, userId: number) {
-  const db = await requireDb();
-  if (input.amount <= 0) throw new Error("INVALID_AMOUNT");
-  const row = (await db.insert(expenditures).values({ ...input, expenditureDate: new Date(input.expenditureDate), amount: String(input.amount), createdByUserId: userId }).$returningId())[0];
-  await writeAudit(userId, "finance.expenditure", "expenditure", row.id, input);
-  return { ok: true, id: row.id };
-}
-
-export async function financialSummary() {
-  const db = await requireDb();
-  const [paymentRows, expenditureRows] = await Promise.all([db.select().from(payments), db.select().from(expenditures)]);
-  return { collected: paymentRows.reduce((s, row) => s + Number(row.amount), 0), expenditure: expenditureRows.reduce((s, row) => s + Number(row.amount), 0), balance: paymentRows.reduce((s, row) => s + Number(row.amount), 0) - expenditureRows.reduce((s, row) => s + Number(row.amount), 0) };
 }
 
 export async function listNotifications() {

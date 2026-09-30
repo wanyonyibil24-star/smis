@@ -18,11 +18,9 @@ import {
   getPersonalTimetable,
   canManageMasterTimetable,
   getDashboardSnapshot,
-  getFinanceOverview,
   getIntegratedReportCard,
   getReportCard,
   getSettings,
-  getStoreOverview,
   listAlumni,
   listAllocations,
   listAcademicCatalog,
@@ -49,8 +47,6 @@ import {
   listTimetable,
   listTeacherCodes,
   listTimetableRequirements,
-  recordPayment,
-  recordStoreMovement,
   saveAttendance,
   saveAttendanceBatch,
   setAttendanceRegisterStatus,
@@ -66,12 +62,9 @@ import {
 import {
   aiFacts,
   createNotification,
-  financialSummary,
   getPermissionMatrix,
-  listExpenditures,
   listGuardians,
   listNotifications,
-  recordExpenditure,
   saveGuardian,
   setUserPermission,
 } from "./smis-extension";
@@ -149,13 +142,6 @@ export const appRouter = router({
       correctLockedMark: permissionProcedure("settings.edit").input(z.object({ assessmentId: z.number().int().positive(), learnerId: z.number().int().positive(), score: z.number().min(0).max(100), reason: z.string().min(10).max(500) })).mutation(({ input, ctx }) => correctLockedAssessmentMark(input, currentUserId(ctx.user))),
       classMarklist: permissionProcedure("assessments.view").input(z.object({ academicYear: z.number().int().min(2000).max(2100), term: z.string().min(1).max(40), assessmentType: z.enum(["mid_term", "end_term", "average"]), gradeId: z.number().int().positive() })).query(({ input, ctx }) => getClassMarklist(input, currentUserId(ctx.user))),
     }),
-    finance: router({
-      overview: permissionProcedure("finance.view").input(z.object({ learnerId: z.number().int().positive().optional() }).optional()).query(({ input }) => getFinanceOverview(input?.learnerId)),
-      recordPayment: permissionProcedure("finance.edit").input(z.object({ learnerId: z.number().int().positive(), amount: z.number().positive(), paymentMethod: z.enum(["mpesa", "bank", "cash"]), reference: z.string().min(3).max(80) })).mutation(({ input, ctx }) => recordPayment(input, currentUserId(ctx.user))),
-      summary: permissionProcedure("finance.view").query(() => financialSummary()),
-      expenditures: permissionProcedure("finance.view").query(() => listExpenditures()),
-      recordExpenditure: permissionProcedure("finance.edit").input(z.object({ expenditureDate: z.string(), amount: z.number().positive(), category: z.string().min(1).max(120), description: z.string().min(1).max(255), responsiblePerson: z.string().min(1).max(160) })).mutation(({ input, ctx }) => recordExpenditure(input, currentUserId(ctx.user))),
-    }),
     resourcesFinance: router({
       get: protectedProcedure.query(({ ctx }) => loadResourcesFinance(ctx.user.id, ctx.user.role)),
       save: protectedProcedure.input(z.object({ data: z.string().min(1).max(1_500_000), version: z.number().int().nonnegative() })).mutation(({ input, ctx }) => saveResourcesFinance(input, ctx.user.id, ctx.user.role)),
@@ -168,10 +154,6 @@ export const appRouter = router({
     notifications: router({
       list: permissionProcedure("communication.edit").query(() => listNotifications()),
       create: permissionProcedure("communication.edit").input(z.object({ audience: z.enum(["parents", "staff", "learners", "all"]), title: z.string().min(1).max(160), body: z.string().min(1), status: z.enum(["draft", "published"]) })).mutation(({ input, ctx }) => createNotification(input, currentUserId(ctx.user))),
-    }),
-    store: router({
-      overview: permissionProcedure("store.view").query(() => getStoreOverview()),
-      recordMovement: permissionProcedure("store.edit").input(z.object({ itemId: z.number().int().positive(), movementType: z.enum(["received", "issued", "adjustment"]), quantity: z.number().positive(), reference: z.string().max(120).nullable().optional() })).mutation(({ input, ctx }) => recordStoreMovement(input, currentUserId(ctx.user))),
     }),
     timetable: router({
       access: protectedProcedure.query(async ({ ctx }) => {
