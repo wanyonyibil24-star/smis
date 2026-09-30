@@ -108,7 +108,7 @@ export const appRouter = router({
     adminResetPassword: permissionProcedure("users.edit").input(z.object({ userId: z.number().int().positive() })).mutation(({ input, ctx }) => adminResetIamPassword(input.userId, ctx.user.id, ctx.req)),
   }),
   smis: router({
-    health: publicProcedure.query(() => ({ ok: true, service: "kenyan-smis", persistence: "mysql-drizzle", modules: ["learners", "attendance", "assessments", "reports", "finance", "resources-finance", "store", "timetable", "communication", "alumni", "users", "settings", "audit"] })),
+    health: publicProcedure.query(() => ({ ok: true, service: "kenyan-smis", persistence: "mysql-drizzle", modules: ["learners", "attendance", "assessments", "reports", "resources-finance", "store", "timetable", "communication", "alumni", "users", "settings", "audit"] })),
     snapshot: permissionProcedure("dashboard.view").query(() => getDashboardSnapshot()),
     learners: router({
       list: permissionProcedure("learners.view").input(z.object({ search: z.string().optional() }).optional()).query(({ input }) => listLearners(input?.search)),
