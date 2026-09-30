@@ -47,6 +47,15 @@ describe("Resources & Finance access boundaries", () => {
     expect(merged.sup).toHaveLength(2);
   });
 
+  it("preserves receipt-number sequence from saved receipts", () => {
+    const previous = state();
+    const incoming = state();
+    incoming.pay.push({ id: "P-0007", rcp: "RCP-0012", lid: "L-0001", amt: 100 });
+    const merged = mergeResourcesFinanceState(incoming, previous, fullAccess, context, 4);
+    expect(merged.seq.pay).toBe(7);
+    expect(merged.seq.rcp).toBe(12);
+  });
+
   it("rejects HTML injection in persisted user-controlled strings", () => {
     const unsafe = state();
     unsafe.sup[0].name = "<img src=x onerror=alert(1)>";

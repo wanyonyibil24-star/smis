@@ -6,10 +6,10 @@ import { requireDb, userCan, writeAudit } from "./smis";
 const requiredKeys = ["seq", "set", "lrn", "fee", "inv", "pay", "adj", "tx", "bud", "sup", "req", "itm", "mv", "ast", "mnt", "log"] as const;
 const financeKeys = ["set", "fee", "inv", "pay", "adj", "tx", "bud"] as const;
 const storeKeys = ["sup", "req", "itm", "mv", "ast", "mnt"] as const;
-const financeSeqKeys = ["fee", "inv", "pay", "adj", "tx"] as const;
+const financeSeqKeys = ["fee", "inv", "pay", "rcp", "adj", "tx"] as const;
 const storeSeqKeys = ["sup", "req", "itm", "mv", "ast", "mnt"] as const;
-const sequenceSources: Record<string, { array: string; prefix: string }> = {
-  inv: { array: "inv", prefix: "INV" }, pay: { array: "pay", prefix: "P" }, adj: { array: "adj", prefix: "A" },
+const sequenceSources: Record<string, { array: string; prefix: string; field?: string }> = {
+  inv: { array: "inv", prefix: "INV" }, pay: { array: "pay", prefix: "P" }, rcp: { array: "pay", prefix: "RCP", field: "rcp" }, adj: { array: "adj", prefix: "A" },
   tx: { array: "tx", prefix: "T" }, sup: { array: "sup", prefix: "S" }, req: { array: "req", prefix: "PR" },
   itm: { array: "itm", prefix: "I" }, mv: { array: "mv", prefix: "M" }, ast: { array: "ast", prefix: "AST" }, mnt: { array: "mnt", prefix: "MR" },
 };
@@ -140,7 +140,8 @@ export function mergeResourcesFinanceState(incoming: State, previous: State, acc
     if (!mayWrite) { seq[key] = previous.seq[key] ?? 0; continue; }
     const pattern = new RegExp(`^${source.prefix}-(\\d+)$`);
     const max = (merged[source.array] as State[]).reduce((n, row) => {
-      const match = typeof row.id === "string" ? row.id.match(pattern) : null;
+      const value = source.field ? row[source.field] : row.id;
+      const match = typeof value === "string" ? value.match(pattern) : null;
       return Math.max(n, match ? Number(match[1]) : 0);
     }, 0);
     seq[key] = max;
