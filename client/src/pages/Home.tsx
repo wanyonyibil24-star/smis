@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import { BarChart3, BookOpen, Boxes, CalendarDays, CheckCircle2, ChevronRight, CircleDollarSign, ClipboardCheck, GraduationCap, LayoutDashboard, LogOut, Menu, MessageSquareText, Package, Plus, Receipt, ShieldCheck, Sparkles, Users, UserRound, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { NexusAI, ResourcesFinance, TimetableGenerator } from "./Modules";
 
 const nav = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -17,8 +18,9 @@ const nav = [
   { id: "teachers", label: "Teachers", icon: UserRound },
   { id: "assessments", label: "Assessments", icon: ClipboardCheck },
   { id: "attendance", label: "Attendance", icon: CheckCircle2 },
-  { id: "timetable", label: "Timetable", icon: CalendarDays },
-  { id: "ai", label: "Level 3 AI", icon: Sparkles },
+  { id: "resources", label: "Resources & Finance", icon: Receipt },
+  { id: "timetable", label: "Timetable Generator", icon: CalendarDays },
+  { id: "ai", label: "Nexus AI", icon: Sparkles },
   { id: "users", label: "Users & roles", icon: ShieldCheck },
 ];
 
@@ -84,7 +86,7 @@ export default function Home() {
   const learners = trpc.learners.list.useQuery({}); const teachers = trpc.teachers.list.useQuery(); const assessments = trpc.assessments.list.useQuery(); const attendance = trpc.attendance.list.useQuery(); const timetable = trpc.timetable.list.useQuery();
   if (loading) return <div className="min-h-screen grid place-items-center text-slate-500">Loading NEXUS…</div>;
   if (!user) return <SignIn />;
-  const content = section === "dashboard" ? <Dashboard setSection={setSection} /> : section === "learners" ? <Learners /> : section === "teachers" ? <GenericTable title="Teachers" description="Manage teaching staff, learning areas and grade allocations." rows={teachers.data || []} columns={[{ key: "name", label: "Teacher" }, { key: "email", label: "Email" }, { key: "learningAreas", label: "Learning areas" }, { key: "grades", label: "Grades" }]} icon={Users} /> : section === "assessments" ? <GenericTable title="CBC assessments" description="One authoritative assessment source for marklists, report cards and academic reports." rows={assessments.data || []} columns={[{ key: "learnerName", label: "Learner" }, { key: "grade", label: "Grade" }, { key: "learningArea", label: "Learning area" }, { key: "period", label: "Period" }, { key: "rating", label: "Rating" }]} icon={ClipboardCheck} /> : section === "attendance" ? <GenericTable title="Attendance" description="Record and review present, absent, late and excused attendance events." rows={attendance.data || []} columns={[{ key: "learnerName", label: "Learner" }, { key: "grade", label: "Grade" }, { key: "attendanceDate", label: "Date" }, { key: "status", label: "Status" }]} icon={CheckCircle2} /> : section === "finance" ? <FinanceModule /> : section === "store" ? <StoreModule /> : section === "timetable" ? <GenericTable title="Timetable" description="Master timetable across grades, learning areas and assigned teachers." rows={timetable.data || []} columns={[{ key: "day", label: "Day" }, { key: "startTime", label: "Start" }, { key: "endTime", label: "End" }, { key: "grade", label: "Grade" }, { key: "learningArea", label: "Learning area" }, { key: "teacherName", label: "Teacher" }]} icon={CalendarDays} /> : section === "ai" ? <AI /> : <UsersModule />;
+  const content = section === "dashboard" ? <Dashboard setSection={setSection} /> : section === "learners" ? <Learners /> : section === "teachers" ? <GenericTable title="Teachers" description="Manage teaching staff, learning areas and grade allocations." rows={teachers.data || []} columns={[{ key: "name", label: "Teacher" }, { key: "email", label: "Email" }, { key: "learningAreas", label: "Learning areas" }, { key: "grades", label: "Grades" }]} icon={Users} /> : section === "assessments" ? <GenericTable title="CBC assessments" description="One authoritative assessment source for marklists, report cards and academic reports." rows={assessments.data || []} columns={[{ key: "learnerName", label: "Learner" }, { key: "grade", label: "Grade" }, { key: "learningArea", label: "Learning area" }, { key: "period", label: "Period" }, { key: "rating", label: "Rating" }]} icon={ClipboardCheck} /> : section === "attendance" ? <GenericTable title="Attendance" description="Record and review present, absent, late and excused attendance events." rows={attendance.data || []} columns={[{ key: "learnerName", label: "Learner" }, { key: "grade", label: "Grade" }, { key: "attendanceDate", label: "Date" }, { key: "status", label: "Status" }]} icon={CheckCircle2} /> : section === "resources" ? <ResourcesFinance /> : section === "timetable" ? <TimetableGenerator /> : section === "ai" ? <NexusAI /> : <UsersModule />;
   return <Shell section={section} setSection={setSection} user={user} logout={logout}>{content}</Shell>;
 }
 
