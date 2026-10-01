@@ -182,6 +182,18 @@ export const appRouter = router({
         return { answer: `Database facts: ${activeLearners} active learners, ${assessmentRows.length} assessments, ${attendanceRows.length} attendance records, and ${financeRows.length} finance transactions are available. AI analysis is temporarily unavailable; please try again.` };
       }
     }),
+    generateDocument: protectedProcedure.input(z.object({
+      documentType: z.string().min(2), subject: z.string().min(2), grade: z.string().min(2), term: z.string().min(2), topic: z.string().min(2), strand: z.string().optional(), subStrand: z.string().optional(), outcomes: z.string().optional(), competencies: z.string().optional(), values: z.string().optional(), pci: z.string().optional(), assessment: z.string().optional(), resources: z.string().optional(), differentiation: z.string().optional(), reflection: z.string().optional(),
+    })).mutation(async ({ ctx, input }) => {
+      const response = await invokeLLM({ messages: [
+        { role: "system", content: "You are a Kenyan CBC teacher-document specialist. Follow the current KICD curriculum-design structure for the selected grade and learning area. Produce a professional teacher document, not an official KICD publication. Never invent a quoted KICD page or claim approval. Use these headings where relevant: Administrative Details; Strand; Sub-strand; Specific Learning Outcomes; Core Competencies; Values; Pertinent and Contemporary Issues; Learning Experiences; Learning Resources; Assessment Methods/Evidence; Differentiation and Inclusion; Reflection. Align outcomes to observable learner actions, make activities learner-centred, include formative assessment, and use Kenyan CBC terminology. If an input is blank, make a clearly labelled professional recommendation rather than pretending it came from the official design." },
+        { role: "user", content: JSON.stringify({ ...input, source: "KICD Regular Curriculum Designs index (https://kicd.ac.ke/cbc-materials/curriculum-designs/regular-curriculum-designs/)", preparedFor: ctx.user.name || ctx.user.username || "NEXUS teacher" }) },
+      ] });
+      const content = response.choices?.[0]?.message?.content;
+      const document = typeof content === "string" ? content : Array.isArray(content) ? content.map(part => "text" in part ? part.text : "").join(" ") : "The document could not be generated.";
+      await logAudit({ userId: ctx.user.id, action: "generate", module: "level3_ai", details: `KICD-CBC ${input.documentType}: ${input.topic}`, confirmed: false });
+      return { document };
+    }),
   }),
 });
 
