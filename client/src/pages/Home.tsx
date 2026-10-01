@@ -17,8 +17,6 @@ const nav = [
   { id: "teachers", label: "Teachers", icon: UserRound },
   { id: "assessments", label: "Assessments", icon: ClipboardCheck },
   { id: "attendance", label: "Attendance", icon: CheckCircle2 },
-  { id: "finance", label: "Finance", icon: CircleDollarSign },
-  { id: "store", label: "Store & stock", icon: Boxes },
   { id: "timetable", label: "Timetable", icon: CalendarDays },
   { id: "ai", label: "Level 3 AI", icon: Sparkles },
   { id: "users", label: "Users & roles", icon: ShieldCheck },
