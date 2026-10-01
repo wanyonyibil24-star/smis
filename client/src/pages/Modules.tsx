@@ -12,13 +12,11 @@ const sectionClass = "w-full flex items-center gap-2 rounded-lg px-3 py-2 text-l
 
 function ModuleFrame({ title, subtitle, items, current, onChange, children }: { title: string; subtitle: string; items: { id: string; label: string; icon: any }[]; current: string; onChange: (id: string) => void; children: React.ReactNode }) {
   return <div className="rounded-2xl bg-white border border-[#dfe4de] shadow-sm overflow-hidden">
-    <div className="flex flex-col lg:flex-row min-h-[610px]">
-      <aside className="lg:w-[235px] bg-[#0f3b33] text-[#dfeee8] p-4 shrink-0">
-        <div className="px-2 pb-4 border-b border-white/10"><p className="font-bold text-lg tracking-tight">{title}</p><p className="text-xs text-emerald-200/70 mt-1">{subtitle}</p></div>
-        <nav className="mt-4 space-y-1">{items.map(item => { const Icon = item.icon; const active = current === item.id; return <button key={item.id} onClick={() => onChange(item.id)} className={`${sectionClass} ${active ? "bg-white/15 text-white shadow-[inset_3px_0_#c98a1b]" : "text-emerald-50/75 hover:bg-white/10 hover:text-white"}`}><Icon className="w-4 h-4" /><span>{item.label}</span></button>; })}</nav>
-      </aside>
-      <section className="flex-1 min-w-0 bg-[#f5f6f2] p-5 lg:p-7">{children}</section>
+    <div className="bg-[#0f3b33] text-[#dfeee8] px-4 lg:px-6 pt-4">
+      <div className="px-2 pb-3"><p className="font-bold text-lg tracking-tight">{title}</p><p className="text-xs text-emerald-200/70 mt-1">{subtitle}</p></div>
+      <nav className="flex gap-1 overflow-x-auto" aria-label={`${title} sections`}>{items.map(item => { const Icon = item.icon; const active = current === item.id; return <button key={item.id} onClick={() => onChange(item.id)} className={`shrink-0 flex items-center gap-2 px-3 py-3 text-sm whitespace-nowrap border-b-2 transition ${active ? "border-[#c98a1b] bg-white/10 text-white font-semibold" : "border-transparent text-emerald-50/75 hover:bg-white/10 hover:text-white"}`}><Icon className="w-4 h-4" /><span>{item.label}</span></button>; })}</nav>
     </div>
+    <section className="min-h-[610px] bg-[#f5f6f2] p-5 lg:p-7">{children}</section>
   </div>;
 }
 
