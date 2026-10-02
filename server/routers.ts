@@ -6,7 +6,8 @@ import { adminProcedure, protectedProcedure, publicProcedure, router } from "./_
 import { TRPCError } from "@trpc/server";
 import { MANAGE_PERMISSIONS } from "./access";
 import { AdminError, AUDIT_MODULES, adminCatalog, adminOverview, changeAdminAssignment, changeAdminRole, createAdminUser, getAdminUser, getPermissionMatrixView, listAdminUsers, listAuditTrail, resetAdminPassword, setAccountState, setRolePermission, setUserPermissionOverride, updateAdminUser } from "./administration";
-import { correctLockedAssessmentMark, ensureAssessment, getAssessmentEntries, getAssessmentReportCard, getClassMarklist, listAssessmentScopes, saveAssessmentMarks, setAssessmentFinalState, submitAssessment } from "./assessment";
+import { correctLockedAssessmentMark, ensureAssessment, getAssessmentEntries, getClassMarklist, listAssessmentScopes, saveAssessmentMarks, setAssessmentFinalState, submitAssessment } from "./assessment";
+import { createReportCardProcedures } from "./reportCards/server/reportCardRouter";
 import { adminResetIamPassword, changeIamPassword, loginWithIam, logoutIam, requestIamPasswordReset, resetIamPassword, safeAuthProfile } from "./iam";
 import {
   archiveLearner,
@@ -21,8 +22,6 @@ import {
   canManageMasterTimetable,
   getDashboardSnapshot,
   getFinanceOverview,
-  getIntegratedReportCard,
-  getReportCard,
   getSettings,
   getStoreOverview,
   listAlumni,
@@ -57,7 +56,6 @@ import {
   saveAttendanceBatch,
   setAttendanceRegisterStatus,
   saveMark,
-  saveReportCardComments,
   saveSettings,
   setReportCardStatus,
   updateTeacherCode,
@@ -83,6 +81,12 @@ const currentUserId = (user: { id: number }) => user.id;
 const permissionProcedure = (permission: string) => protectedProcedure.use(async ({ ctx, next }) => {
   const allowed = await userCan(ctx.user.id, ctx.user.role, permission);
   if (!allowed) throw new TRPCError({ code: "FORBIDDEN", message: `Missing permission: ${permission}` });
+  return next();
+});
+const reportViewProcedure = protectedProcedure.use(async ({ ctx, next }) => {
+  const allowed = (await userCan(ctx.user.id, ctx.user.role, "reports.view"))
+    || (await userCan(ctx.user.id, ctx.user.role, "report_cards.view"));
+  if (!allowed) throw new TRPCError({ code: "FORBIDDEN", message: "Missing permission: reports.view or report_cards.view" });
   return next();
 });
 const superProcedure = protectedProcedure.use(async ({ ctx, next }) => {
@@ -258,8 +262,7 @@ export const appRouter = router({
       update: adminProcedure.input(z.object({ schoolName: z.string().min(1).max(200), motto: z.string().max(255).nullable().optional(), currentTerm: z.string().min(1).max(40), academicYear: z.number().int().min(2000).max(2100), includeFeesOnReportCard: z.boolean(), showPercentagesOnReportCard: z.boolean().optional() })).mutation(({ input, ctx }) => saveSettings(input, currentUserId(ctx.user))),
     }),
     reports: router({
-      reportCard: permissionProcedure("reports.view").input(z.object({ learnerId: z.number().int().positive(), academicYear: z.number().int().min(2000).max(2100), term: z.string().min(1).max(40), assessmentType: z.enum(["mid_term", "end_term"]) })).query(({ input, ctx }) => getAssessmentReportCard(input, currentUserId(ctx.user))),
-      saveReportCardComments: permissionProcedure("assessments.edit").input(z.object({ learnerId: z.number().int().positive(), academicYear: z.number().int(), term: z.string().max(40), assessmentType: z.enum(["mid_term", "end_term"]).default("end_term"), classTeacherComment: z.string().max(1000).nullable().optional(), headTeacherComment: z.string().max(1000).nullable().optional() })).mutation(({ input, ctx }) => saveReportCardComments(input, currentUserId(ctx.user))),
+      ...createReportCardProcedures({ router, protectedProcedure: reportViewProcedure }),
       setReportCardStatus: adminProcedure.input(z.object({ learnerId: z.number().int().positive(), academicYear: z.number().int(), term: z.string().max(40), assessmentType: z.enum(["mid_term", "end_term"]).default("end_term"), status: z.enum(["draft", "generated", "reviewed", "approved", "published"]) })).mutation(({ input, ctx }) => setReportCardStatus(input, currentUserId(ctx.user))),
     }),
     audit: router({

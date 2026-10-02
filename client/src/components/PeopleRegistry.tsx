@@ -24,14 +24,14 @@ const roles: Array<{ value: StaffRole; label: string }> = [
 ];
 
 function downloadTemplate(kind: ImportKind) {
-  const sample = kind === "learners"
-    ? [{ learnerName: "Amina Mwende", admissionNumber: "G7-001", guardianName: "Mary Mwende", guardianIdNumber: "12345678", guardianPhone: "+254700000000", gradeName: "Grade 7", stream: "Green", status: "active" }]
-    : [{ staffName: "Joseph Otieno", title: "Mr", designation: "English Teacher", phone: "+254700000001", email: "joseph@example.com", role: "teacher", status: "active" }];
+  const headers = kind === "learners"
+    ? ["learnerName", "admissionNumber", "guardianName", "guardianIdNumber", "guardianPhone", "gradeName", "stream", "status"]
+    : ["staffName", "title", "designation", "phone", "email", "role", "status"];
   const instructions = kind === "learners"
     ? [["Learners template instructions"], ["Required: learnerName, admissionNumber, gradeName"], ["Use an existing Grade/Class name; stream is optional when the grade name is unique."], ["Status must be active or inactive. Admission numbers must be unique."]]
     : [["Staff template instructions"], ["Required: staffName"], ["Staff Code is generated automatically by NEXUS and must not be supplied."], ["role values: teacher, class_teacher, senior_teacher, deputy_head, head_teacher, finance, storekeeper, other"], ["Status must be active or inactive."]];
   const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(sample), kind === "learners" ? "Learners" : "Staff");
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([headers]), kind === "learners" ? "Learners" : "Staff");
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(instructions), "Instructions");
   XLSX.writeFile(workbook, `NEXUS-${kind}-template.xlsx`);
 }
