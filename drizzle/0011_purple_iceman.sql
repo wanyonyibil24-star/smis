@@ -1,0 +1,1 @@
+-- Allocation scope index is created in 0010_mysterious_nitro.sql.

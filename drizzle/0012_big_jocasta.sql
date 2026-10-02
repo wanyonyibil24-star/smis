@@ -1,0 +1,1 @@
+ALTER TABLE `staff_profiles` MODIFY COLUMN `role` enum('super_admin','admin','teacher','class_teacher','senior_teacher','deputy_head','head_teacher','finance','storekeeper','other') NOT NULL DEFAULT 'other';

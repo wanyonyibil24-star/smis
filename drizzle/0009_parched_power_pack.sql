@@ -1,0 +1,1 @@
+ALTER TABLE `school_settings` ADD `showPercentagesOnReportCard` int DEFAULT 0 NOT NULL;
