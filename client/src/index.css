@@ -106,7 +106,32 @@ button:focus-visible, input:focus-visible { outline: 3px solid rgb(29 106 87 / 2
 .chart-bar { border-radius: .34rem .34rem .1rem .1rem; background: linear-gradient(180deg, #63a28c 0%, #1d6a57 100%); min-height: 10px; transition: height 300ms cubic-bezier(.23,1,.32,1); }
 .status-ring { display: inline-flex; align-items: center; justify-content: center; width: 1.55rem; height: 1.55rem; border: 1.5px solid #a0bfb0; border-radius: 50%; color: #1d6a57; }
 .photo-tint { background: linear-gradient(90deg, rgb(29 106 87 / 4%), rgb(217 155 61 / 8%)); }
-
+.personal-timetable-paper { overflow: hidden; border: 1px solid #c7c7bf; background: #fff; color: #222; box-shadow: 5px 5px 0 #e6e1d5; }
+.personal-timetable-title { display: grid; grid-template-columns: minmax(7rem, 1fr) minmax(14rem, 2fr) minmax(4rem, 1fr); align-items: center; gap: .6rem; border-bottom: 3px solid #222; padding: .65rem .8rem; text-align: center; }
+.personal-timetable-title p { margin: 0; font-size: .72rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+.personal-timetable-title h2 { margin: .1rem 0 0; font-size: 1.2rem; font-weight: 900; letter-spacing: .04em; }
+.personal-timetable-teacher { text-align: left; font-size: .78rem; font-weight: 800; }
+.personal-timetable-teacher small { display: block; margin-top: .2rem; color: #60645f; font-size: .62rem; font-weight: 600; }
+.personal-timetable-print-button { display: flex; justify-content: flex-end; }
+.personal-timetable-print-button button { display: inline-flex; align-items: center; gap: .3rem; border: 1px solid #c8c8c1; padding: .35rem .55rem; font-size: .68rem; font-weight: 800; }
+.personal-timetable-scroll { overflow-x: auto; }
+.personal-timetable-grid { width: 100%; min-width: 980px; border-collapse: collapse; table-layout: fixed; font-size: .67rem; }
+.personal-timetable-grid th, .personal-timetable-grid td { border: 1px solid #555; }
+.personal-time-day-head, .personal-time-day { width: 4.5rem; background: #f4f4ef; text-align: center; font-weight: 900; }
+.personal-time-period-head, .personal-time-break-head { height: 3.5rem; background: #fafaf5; text-align: center; vertical-align: middle; }
+.personal-time-period-head b, .personal-time-break-head b { display: block; font-size: .78rem; }
+.personal-time-period-head small, .personal-time-break-head small { display: block; margin-top: .2rem; font-size: .51rem; font-weight: 600; white-space: nowrap; }
+.personal-time-break-head { background: #f1f1ec; }
+.personal-time-break-cell { width: 2.15rem; background: #f2f2ed; text-align: center; vertical-align: middle; }
+.personal-time-break-cell span { display: block; transform: rotate(-90deg); font-size: .75rem; font-weight: 900; letter-spacing: .08em; }
+.personal-time-subject-cell { height: 5.1rem; padding: .25rem; text-align: center; vertical-align: middle; }
+.personal-time-subject-cell.has-lesson { background: linear-gradient(135deg, #fff 0 86%, #d7d7d0 86% 100%); }
+.personal-time-subject-cell b { display: block; font-size: .92rem; line-height: 1.05; letter-spacing: .03em; }
+.personal-time-subject-cell span { display: block; margin-top: .2rem; font-size: .61rem; font-weight: 700; }
+.personal-time-subject-cell small { display: block; margin-top: .15rem; font-size: .54rem; color: #555; }
+.personal-time-subject-cell .personal-time-code { font-weight: 900; }
+.personal-time-empty { color: #9a9b95; font-size: .75rem !important; }
+.personal-timetable-date { padding: .45rem .7rem; color: #646761; font-size: .63rem; text-align: right; }
 @keyframes page-enter { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; } }
 
@@ -122,6 +147,14 @@ button:focus-visible, input:focus-visible { outline: 3px solid rgb(29 106 87 / 2
 }
 
 @media print {
+  body * { visibility: hidden !important; }
+  .personal-timetable-paper, .personal-timetable-paper * { visibility: visible !important; }
+  .personal-timetable-paper { position: absolute; inset: 0; width: 100%; border: 0; box-shadow: none; }
+  .personal-timetable-print-button { display: none !important; }
+  .personal-timetable-grid { min-width: 0; font-size: 7pt; }
+  .personal-time-subject-cell { height: 25mm; }
+  .personal-time-period-head small, .personal-time-break-head small { font-size: 5.5pt; }
+  .personal-timetable-date { font-size: 6pt; }
   body * {
     visibility: hidden !important;
   }

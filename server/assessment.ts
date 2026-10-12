@@ -47,7 +47,7 @@ async function actorAccess(userId: number): Promise<ActorAccess> {
     .where(eq(users.id, userId)).limit(1))[0];
   const profileRole = row?.profileRole ?? null;
   return {
-    isAdmin: row?.userRole === "admin" || profileRole === "admin" || profileRole === "super_admin",
+    isAdmin: row?.userRole === "admin" || ["admin", "super_admin", "head_teacher", "deputy_head"].includes(profileRole ?? ""),
     profileRole,
   };
 }
@@ -378,5 +378,97 @@ export async function getClassMarklist(input: { academicYear: number; term: stri
     subjects: subjectRows,
     learners: classList,
     missingCount: classList.reduce((sum, row) => sum + row.missingCount, 0),
+  };
+}
+
+export async function getAssessmentReportCard(input: { learnerId: number; academicYear: number; term: string; assessmentType: AssessmentType }, userId: number) {
+  const db = await requireDb();
+  const learnerRow = (await db.select({ learner: learners, grade: grades }).from(learners)
+    .leftJoin(grades, eq(grades.id, learners.gradeId)).where(eq(learners.id, input.learnerId)).limit(1))[0];
+  if (!learnerRow) throw new Error("LEARNER_NOT_FOUND");
+  const access = await actorAccess(userId);
+  const canViewWholeClass = access.isAdmin || learnerRow.grade?.classTeacherUserId === userId;
+  const allocationFilters = [
+    eq(teacherAllocations.gradeId, learnerRow.learner.gradeId),
+    eq(teacherAllocations.academicYear, input.academicYear),
+    eq(teacherAllocations.term, input.term),
+  ];
+  if (!access.isAdmin) allocationFilters.push(eq(teacherAllocations.teacherUserId, userId));
+  const allocations = await db.select({ allocation: teacherAllocations, subject: subjects, staff: staffProfiles })
+    .from(teacherAllocations).innerJoin(subjects, eq(subjects.id, teacherAllocations.subjectId))
+    .leftJoin(staffProfiles, eq(staffProfiles.userId, teacherAllocations.teacherUserId))
+    .where(and(...allocationFilters)).orderBy(subjects.name);
+  const classSubjects = canViewWholeClass
+    ? await db.select({ subject: subjects }).from(subjects).orderBy(subjects.name)
+    : [];
+  const reportSubjects = classSubjects.length ? classSubjects : allocations;
+  if (!reportSubjects.length && !canViewWholeClass) throw new Error("REPORT_SCOPE_FORBIDDEN");
+  const allocationBySubject = new Map(allocations.map(row => [row.subject.id, row]));
+
+  const periodAssessments = await db.select().from(assessments).where(and(
+    eq(assessments.gradeId, learnerRow.learner.gradeId),
+    eq(assessments.academicYear, input.academicYear),
+    eq(assessments.term, input.term),
+    eq(assessments.assessmentType, input.assessmentType),
+  ));
+  const publishedAssessments = periodAssessments.filter(row => row.status === "approved" || row.status === "locked");
+  const ids = publishedAssessments.map(row => row.id);
+  const saved = ids.length
+    ? await db.select().from(marks).where(and(eq(marks.learnerId, input.learnerId), inArray(marks.assessmentId, ids)))
+    : [];
+  const savedBySubject = new Map(saved.map(row => [row.subjectId, row]));
+  const marksheet = Array.from(new Map(reportSubjects.map(row => [row.subject.id, row])).values()).map(row => {
+    const assessment = publishedAssessments.find(item => item.subjectId === row.subject.id);
+    const mark = savedBySubject.get(row.subject.id);
+    const assignment = allocationBySubject.get(row.subject.id);
+    return {
+      subject: row.subject,
+      score: mark?.score == null ? null : Number(mark.score),
+      midTerm: mark?.midTerm == null ? null : Number(mark.midTerm),
+      endTerm: mark?.endTerm == null ? null : Number(mark.endTerm),
+      average: mark?.average == null ? null : Number(mark.average),
+      cbcLevel: mark?.cbcLevel ?? null,
+      teacherRemark: mark?.teacherRemark ?? null,
+      assessmentStatus: assessment?.status ?? periodAssessments.find(item => item.subjectId === row.subject.id)?.status ?? "missing",
+      teacherName: assignment?.staff?.displayName ?? null,
+    };
+  });
+  const attendanceRows = await db.select().from(attendances).where(eq(attendances.learnerId, input.learnerId));
+  const present = attendanceRows.filter(row => row.status === "present" || row.status === "late").length;
+  const absent = attendanceRows.filter(row => row.status === "absent").length;
+  const classTeacher = learnerRow.grade?.classTeacherUserId
+    ? (await db.select().from(staffProfiles).where(eq(staffProfiles.userId, learnerRow.grade.classTeacherUserId)).limit(1))[0]?.displayName ?? null
+    : null;
+  const existing = (await db.select().from(reportCards).where(and(
+    eq(reportCards.learnerId, input.learnerId),
+    eq(reportCards.academicYear, input.academicYear),
+    eq(reportCards.term, input.term),
+    eq(reportCards.assessmentType, input.assessmentType),
+  )).limit(1))[0];
+  if (!existing) {
+    await db.insert(reportCards).values({ ...input, status: "draft", generatedByUserId: userId });
+  }
+  const report = existing ?? (await db.select().from(reportCards).where(and(
+    eq(reportCards.learnerId, input.learnerId),
+    eq(reportCards.academicYear, input.academicYear),
+    eq(reportCards.term, input.term),
+    eq(reportCards.assessmentType, input.assessmentType),
+  )).limit(1))[0] ?? null;
+  const statuses = marksheet.map(row => row.assessmentStatus);
+  const assessmentStatus = statuses.includes("missing") ? "incomplete" : statuses.includes("draft") ? "draft" : statuses.includes("submitted") ? "submitted" : statuses.includes("approved") ? "approved" : "locked";
+  const settings = await getSettings();
+  return {
+    learner: learnerRow.learner,
+    grade: learnerRow.grade,
+    settings,
+    academicYear: input.academicYear,
+    term: input.term,
+    assessmentType: input.assessmentType,
+    marksheet,
+    missingCount: marksheet.filter(row => row.score === null).length,
+    assessmentStatus,
+    attendance: { openingDays: attendanceRows.length, present, absent },
+    classTeacher,
+    report,
   };
 }

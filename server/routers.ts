@@ -6,9 +6,12 @@ import { adminProcedure, protectedProcedure, publicProcedure, router } from "./_
 import { TRPCError } from "@trpc/server";
 import { MANAGE_PERMISSIONS } from "./access";
 import { AdminError, AUDIT_MODULES, adminCatalog, adminOverview, changeAdminAssignment, changeAdminRole, createAdminUser, getAdminUser, getPermissionMatrixView, listAdminUsers, listAuditTrail, resetAdminPassword, setAccountState, setRolePermission, setUserPermissionOverride, updateAdminUser } from "./administration";
-import { correctLockedAssessmentMark, ensureAssessment, getAssessmentEntries, getClassMarklist, listAssessmentScopes, saveAssessmentMarks, setAssessmentFinalState, submitAssessment } from "./assessment";
-import { createReportCardProcedures } from "./reportCards/server/reportCardRouter";
+import { correctLockedAssessmentMark, ensureAssessment, getAssessmentEntries, getAssessmentReportCard, getClassMarklist, listAssessmentScopes, saveAssessmentMarks, setAssessmentFinalState, submitAssessment } from "./assessment";
 import { adminResetIamPassword, changeIamPassword, loginWithIam, logoutIam, requestIamPasswordReset, resetIamPassword, safeAuthProfile } from "./iam";
+import { clockIn, getClockingSetup, saveSchoolLocation } from "./clocking";
+import { listMessageGrades, listMessageRecipients, listNexusMessages, previewMessageRecipients, queueNexusMessage } from "./messages";
+import { getCurriculumSetup, saveCurriculumSelections, saveEnabledSchoolLevels } from "./curriculum";
+import { addLibraryBook, checkoutLibraryBook, libraryLookups, libraryOverview, listLibraryBooks, listLibraryLoans, renewLibraryLoan, returnLibraryBook } from "./library";
 import {
   archiveLearner,
   canViewMasterTimetable,
@@ -18,15 +21,19 @@ import {
   getAttendanceRegister,
   getAttendanceRegisterApproval,
   getAttendanceSummary,
+  getLastPeopleImport,
   getPersonalTimetable,
   canManageMasterTimetable,
   getDashboardSnapshot,
   getFinanceOverview,
+  getIntegratedReportCard,
+  getReportCard,
   getSettings,
   getStoreOverview,
   listAlumni,
   listAllocations,
   listAcademicCatalog,
+  canManageSchoolLevels,
   saveTeacherAllocation,
   changeTeacherAllocationStatus,
   listAssessments,
@@ -41,6 +48,7 @@ import {
   setLearnerStatus,
   previewPeopleImport,
   importPeopleRows,
+  undoLastPeopleImport,
   listMarks,
   listStaff,
   createStaff,
@@ -56,6 +64,7 @@ import {
   saveAttendanceBatch,
   setAttendanceRegisterStatus,
   saveMark,
+  saveReportCardComments,
   saveSettings,
   setReportCardStatus,
   updateTeacherCode,
@@ -83,12 +92,6 @@ const permissionProcedure = (permission: string) => protectedProcedure.use(async
   if (!allowed) throw new TRPCError({ code: "FORBIDDEN", message: `Missing permission: ${permission}` });
   return next();
 });
-const reportViewProcedure = protectedProcedure.use(async ({ ctx, next }) => {
-  const allowed = (await userCan(ctx.user.id, ctx.user.role, "reports.view"))
-    || (await userCan(ctx.user.id, ctx.user.role, "report_cards.view"));
-  if (!allowed) throw new TRPCError({ code: "FORBIDDEN", message: "Missing permission: reports.view or report_cards.view" });
-  return next();
-});
 const superProcedure = protectedProcedure.use(async ({ ctx, next }) => {
   if (!(await userCan(ctx.user.id, ctx.user.role, MANAGE_PERMISSIONS))) {
     await writeAudit(ctx.user.id, "auth.access_denied", "permission", MANAGE_PERMISSIONS, { required: MANAGE_PERMISSIONS });
@@ -110,7 +113,10 @@ const masterTimetableProcedure = protectedProcedure.use(async ({ ctx, next }) =>
   if (!await canManageMasterTimetable(ctx.user.id, ctx.user.role)) throw new TRPCError({ code: "FORBIDDEN", message: "MASTER_TIMETABLE_ADMIN_ONLY" });
   return next();
 });
-
+const schoolLevelProcedure = protectedProcedure.use(async ({ ctx, next }) => {
+  if (!await canManageSchoolLevels(ctx.user.id)) throw new TRPCError({ code: "FORBIDDEN", message: "Only a Super Administrator can configure school levels." });
+  return next();
+});
 export const appRouter = router({
   system: systemRouter,
   auth: router({
@@ -188,6 +194,21 @@ export const appRouter = router({
       list: permissionProcedure("communication.edit").query(() => listNotifications()),
       create: permissionProcedure("communication.edit").input(z.object({ audience: z.enum(["parents", "staff", "learners", "all"]), title: z.string().min(1).max(160), body: z.string().min(1), status: z.enum(["draft", "published"]) })).mutation(({ input, ctx }) => createNotification(input, currentUserId(ctx.user))),
     }),
+    clocking: router({
+      status: protectedProcedure.query(({ ctx }) => getClockingSetup(ctx.user.id)),
+      clockIn: permissionProcedure("dashboard.view").input(z.object({ latitude: z.number().min(-90).max(90), longitude: z.number().min(-180).max(180) })).mutation(({ input, ctx }) => clockIn(input, ctx.user.id)),
+      saveLocation: permissionProcedure("settings.edit").input(z.object({ latitude: z.number().min(-90).max(90), longitude: z.number().min(-180).max(180), radiusMeters: z.number().int().min(25).max(1000) })).mutation(({ input, ctx }) => saveSchoolLocation(input, ctx.user.id, ctx.user.role)),
+    }),
+    library: router({
+      overview: permissionProcedure("library.view").query(() => libraryOverview()),
+      lookups: permissionProcedure("library.view").query(() => libraryLookups()),
+      books: permissionProcedure("library.view").input(z.object({ search: z.string().optional() }).optional()).query(({ input }) => listLibraryBooks(input?.search)),
+      loans: permissionProcedure("library.view").input(z.object({ overdueOnly: z.boolean().optional() }).optional()).query(({ input }) => listLibraryLoans(input?.overdueOnly ?? false)),
+      addBook: permissionProcedure("library.create").input(z.object({ title: z.string().min(1).max(200), author: z.string().max(160).nullable().optional(), isbn: z.string().max(40).nullable().optional(), publisher: z.string().max(160).nullable().optional(), pubYear: z.number().int().min(1800).max(2200).nullable().optional(), subject: z.string().max(120).nullable().optional(), categoryId: z.number().int().positive().nullable().optional(), copies: z.number().int().min(1).max(100), location: z.string().max(120).nullable().optional() })).mutation(({ input, ctx }) => addLibraryBook(input, ctx.user.id)),
+      checkout: permissionProcedure("library.edit").input(z.object({ copyId: z.number().int().positive(), learnerId: z.number().int().positive().nullable().optional(), staffUserId: z.number().int().positive().nullable().optional(), dueDays: z.number().int().min(1).max(90) })).mutation(({ input, ctx }) => checkoutLibraryBook(input, ctx.user.id)),
+      return: permissionProcedure("library.edit").input(z.object({ loanId: z.number().int().positive() })).mutation(({ input, ctx }) => returnLibraryBook(input.loanId, ctx.user.id)),
+      renew: permissionProcedure("library.edit").input(z.object({ loanId: z.number().int().positive() })).mutation(({ input, ctx }) => renewLibraryLoan(input.loanId, ctx.user.id)),
+    }),
     store: router({
       overview: permissionProcedure("store.view").query(() => getStoreOverview()),
       recordMovement: permissionProcedure("store.edit").input(z.object({ itemId: z.number().int().positive(), movementType: z.enum(["received", "issued", "adjustment"]), quantity: z.number().positive(), reference: z.string().max(120).nullable().optional() })).mutation(({ input, ctx }) => recordStoreMovement(input, currentUserId(ctx.user))),
@@ -214,7 +235,14 @@ export const appRouter = router({
     }),
     communication: router({
       list: permissionProcedure("communication.edit").query(() => listCommunications()),
-      create: permissionProcedure("communication.edit").input(z.object({ audience: z.enum(["parents", "staff", "learners", "all"]), channel: z.enum(["sms", "notice", "email"]), subject: z.string().min(1).max(160), body: z.string().min(1) })).mutation(({ input, ctx }) => createCommunication(input, currentUserId(ctx.user))),
+      create: permissionProcedure("communication.edit").input(z.object({ audience: z.enum(["parents", "staff", "learners", "all"]), channel: z.enum(["sms", "notice", "email"]), subject: z.string().min(1).max(160), body: z.string().min(1).max(5000) })).mutation(({ input, ctx }) => createCommunication(input, currentUserId(ctx.user))),
+    }),
+    messages: router({
+      grades: permissionProcedure("communication.edit").query(() => listMessageGrades()),
+      recipients: permissionProcedure("communication.edit").input(z.object({ kind: z.enum(["guardian", "learner", "staff", "guardian_grade"]), search: z.string().optional(), gradeId: z.number().int().positive().optional() })).query(({ input }) => listMessageRecipients(input.kind, input.search, input.gradeId)),
+      preview: permissionProcedure("communication.edit").input(z.object({ kind: z.enum(["guardian", "learner", "staff", "grade", "guardian_grade"]), ids: z.array(z.number().int().positive()).default([]), gradeId: z.number().int().positive().optional() })).query(({ input }) => previewMessageRecipients(input.kind, input.ids, input.gradeId)),
+      history: permissionProcedure("communication.edit").query(() => listNexusMessages()),
+      queue: permissionProcedure("communication.edit").input(z.object({ category: z.string().max(80).default("announcement"), channel: z.enum(["sms", "email", "in_app", "whatsapp"]), body: z.string().min(1).max(5000), kind: z.enum(["guardian", "learner", "staff", "grade", "guardian_grade"]), ids: z.array(z.number().int().positive()).default([]), gradeId: z.number().int().positive().optional() })).mutation(({ input, ctx }) => queueNexusMessage(input, currentUserId(ctx.user))),
     }),
     alumni: router({
       list: permissionProcedure("alumni.edit").query(() => listAlumni()),
@@ -239,6 +267,8 @@ export const appRouter = router({
     }),
     users: router({
       list: permissionProcedure("users.edit").input(z.object({ search: z.string().optional() }).optional()).query(({ input }) => listStaff(input?.search)),
+      lastImport: permissionProcedure("users.edit").query(() => getLastPeopleImport()),
+      undoLastImport: permissionProcedure("users.edit").mutation(({ ctx }) => undoLastPeopleImport(currentUserId(ctx.user))),
       createStaff: permissionProcedure("users.edit").input(z.object({ displayName: z.string().min(1).max(160), title: z.string().max(30).nullable().optional(), designation: z.string().max(120).nullable().optional(), phone: z.string().max(40).nullable().optional(), email: z.string().email().nullable().optional(), role: z.enum(["teacher", "class_teacher", "senior_teacher", "deputy_head", "head_teacher", "finance", "storekeeper", "other"]), status: z.enum(["active", "inactive"]) })).mutation(({ input, ctx }) => createStaff(input, currentUserId(ctx.user))),
       updateStaff: permissionProcedure("users.edit").input(z.object({ staffProfileId: z.number().int().positive(), displayName: z.string().min(1).max(160), title: z.string().max(30).nullable().optional(), designation: z.string().max(120).nullable().optional(), phone: z.string().max(40).nullable().optional(), email: z.string().email().nullable().optional(), role: z.enum(["teacher", "class_teacher", "senior_teacher", "deputy_head", "head_teacher", "finance", "storekeeper", "other"]), status: z.enum(["active", "inactive"]) })).mutation(({ input, ctx }) => updateStaff(input, currentUserId(ctx.user))),
       setStaffStatus: permissionProcedure("users.edit").input(z.object({ staffProfileId: z.number().int().positive(), status: z.enum(["active", "inactive"]) })).mutation(({ input, ctx }) => setStaffStatus(input, currentUserId(ctx.user))),
@@ -259,10 +289,15 @@ export const appRouter = router({
       get: permissionProcedure("dashboard.view").query(() => getSettings()),
       createGrade: permissionProcedure("settings.edit").input(z.object({ name: z.string().min(1).max(80), stream: z.string().max(80).nullable().optional() })).mutation(({ input, ctx }) => createGradeClass(input, currentUserId(ctx.user))),
       createSubject: permissionProcedure("settings.edit").input(z.object({ name: z.string().min(1).max(120), code: z.string().min(1).max(30) })).mutation(({ input, ctx }) => createLearningArea(input, currentUserId(ctx.user))),
+      curriculum: permissionProcedure("settings.edit").query(() => getCurriculumSetup()),
+      canManageSchoolLevels: protectedProcedure.query(({ ctx }) => canManageSchoolLevels(currentUserId(ctx.user))),
+      saveCurriculum: permissionProcedure("settings.edit").input(z.object({ selections: z.array(z.object({ level: z.string().max(40), grade: z.string().max(40), pathway: z.string().max(100).nullable().optional(), area: z.string().max(160), offered: z.boolean() })) })).mutation(({ input, ctx }) => saveCurriculumSelections(input, currentUserId(ctx.user))),
+      saveSchoolLevels: schoolLevelProcedure.input(z.object({ levels: z.array(z.enum(["ECDE", "Primary", "Junior School", "Senior School"])) })).mutation(({ input, ctx }) => saveEnabledSchoolLevels(input.levels, currentUserId(ctx.user))),
       update: adminProcedure.input(z.object({ schoolName: z.string().min(1).max(200), motto: z.string().max(255).nullable().optional(), currentTerm: z.string().min(1).max(40), academicYear: z.number().int().min(2000).max(2100), includeFeesOnReportCard: z.boolean(), showPercentagesOnReportCard: z.boolean().optional() })).mutation(({ input, ctx }) => saveSettings(input, currentUserId(ctx.user))),
     }),
     reports: router({
-      ...createReportCardProcedures({ router, protectedProcedure: reportViewProcedure }),
+      reportCard: permissionProcedure("reports.view").input(z.object({ learnerId: z.number().int().positive(), academicYear: z.number().int().min(2000).max(2100), term: z.string().min(1).max(40), assessmentType: z.enum(["mid_term", "end_term"]) })).query(({ input, ctx }) => getAssessmentReportCard(input, currentUserId(ctx.user))),
+      saveReportCardComments: permissionProcedure("assessments.edit").input(z.object({ learnerId: z.number().int().positive(), academicYear: z.number().int(), term: z.string().max(40), assessmentType: z.enum(["mid_term", "end_term"]).default("end_term"), classTeacherComment: z.string().max(1000).nullable().optional(), headTeacherComment: z.string().max(1000).nullable().optional() })).mutation(({ input, ctx }) => saveReportCardComments(input, currentUserId(ctx.user))),
       setReportCardStatus: adminProcedure.input(z.object({ learnerId: z.number().int().positive(), academicYear: z.number().int(), term: z.string().max(40), assessmentType: z.enum(["mid_term", "end_term"]).default("end_term"), status: z.enum(["draft", "generated", "reviewed", "approved", "published"]) })).mutation(({ input, ctx }) => setReportCardStatus(input, currentUserId(ctx.user))),
     }),
     audit: router({

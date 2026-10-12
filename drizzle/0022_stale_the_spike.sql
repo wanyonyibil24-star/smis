@@ -1,0 +1,1 @@
+ALTER TABLE `school_settings` ADD `enabledSchoolLevels` varchar(255) DEFAULT 'ECDE,Primary,Junior School,Senior School' NOT NULL;

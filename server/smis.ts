@@ -2,6 +2,7 @@ import { and, desc, eq, gte, inArray, like, lte, or, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { getDb } from "./db";
 import { computePermissions } from "./access";
+import { curriculumCatalogue } from "./curriculum";
 import { attendanceGradeLevel, validateAttendanceBatch, type AttendanceBatchEntry } from "../shared/attendance";
 import {
   alumni,
@@ -10,6 +11,7 @@ import {
   attendances,
   auditLogs,
   communications,
+  curriculumOfferings,
   expenditures,
   guardians,
   learnerGuardians,
@@ -99,10 +101,12 @@ export async function getSettings() {
 
 export async function getDashboardSnapshot() {
   const db = await requireDb();
-  const [settings, learnerRows, attendanceRows, paymentRows, assessmentRows, staffRows, lowStockRows] = await Promise.all([
+  const trendStart = new Date(); trendStart.setHours(0, 0, 0, 0); trendStart.setDate(trendStart.getDate() - 6);
+  const [settings, learnerRows, attendanceRows, trendRows, paymentRows, assessmentRows, staffRows, lowStockRows] = await Promise.all([
     getSettings(),
     db.select({ learner: learners, grade: grades }).from(learners).leftJoin(grades, eq(grades.id, learners.gradeId)).where(eq(learners.status, "active")),
     db.select().from(attendances).orderBy(desc(attendances.id)).limit(100),
+    db.select({ attendanceDate: attendances.attendanceDate, status: attendances.status }).from(attendances).where(gte(attendances.attendanceDate, trendStart)),
     db.select().from(payments).orderBy(desc(payments.paidAt)).limit(100),
     db.select().from(assessments).where(sql`${assessments.status} <> 'approved'`),
     db.select().from(staffProfiles).where(eq(staffProfiles.status, "active")),
@@ -111,6 +115,7 @@ export async function getDashboardSnapshot() {
   const attendanceToday = attendanceRows.filter(row => String(row.attendanceDate) === new Date().toISOString().slice(0, 10));
   const present = attendanceToday.filter(row => row.status === "present").length;
   const attendanceRate = attendanceToday.length ? Math.round((present / attendanceToday.length) * 1000) / 10 : 0;
+  const attendanceTrend = Array.from({ length: 7 }, (_, index) => { const date = new Date(trendStart); date.setDate(trendStart.getDate() + index); const label = date.toISOString().slice(0, 10); const rows = trendRows.filter(row => String(row.attendanceDate) === label); return { label, present: rows.filter(row => row.status === "present" || row.status === "late").length, absent: rows.filter(row => row.status === "absent").length }; });
   const learnersById = new Map(learnerRows.map(row => [row.learner.id, row]));
   const recentAttendance = attendanceToday.slice(0, 8).flatMap(attendance => {
     const row = learnersById.get(attendance.learnerId);
@@ -128,6 +133,7 @@ export async function getDashboardSnapshot() {
     school: settings,
     counts: { learners: learnerRows.length, staff: staffRows.length, assessmentsPending: assessmentRows.length, collections },
     attendance: { today: attendanceToday.length, present, rate: attendanceRate },
+    attendanceTrend,
     recentAttendance,
     lowStock: Array.from(stock.values()).filter(item => item.quantity <= item.reorderLevel),
     recentLearners: learnerRows.slice(0, 8).map(row => ({ ...row.learner, grade: row.grade ? `${row.grade.name}${row.grade.stream ? ` ${row.grade.stream}` : ""}` : "" })),
@@ -512,13 +518,21 @@ export async function getPersonalTimetable(userId: number) {
   const db = await requireDb();
   const profile = (await db.select({ displayName: staffProfiles.displayName, teacherCode: staffProfiles.teacherCode }).from(staffProfiles).where(eq(staffProfiles.userId, userId)).limit(1))[0];
   const user = (await db.select({ name: users.name, username: users.username }).from(users).where(eq(users.id, userId)).limit(1))[0];
+  const settings = (await db.select({ enabledSchoolLevels: schoolSettings.enabledSchoolLevels }).from(schoolSettings).limit(1))[0];
+  const enabledLevels = new Set((settings?.enabledSchoolLevels || "ECDE,Primary,Junior School,Senior School").split(","));
+  const relevantAreas = new Set(curriculumCatalogue().filter(row => enabledLevels.has(row.level)).map(row => row.area.toLowerCase()));
   const entries = await db.select({ entry: timetableEntries, grade: grades, subject: subjects })
     .from(timetableEntries)
     .leftJoin(grades, eq(grades.id, timetableEntries.gradeId))
     .leftJoin(subjects, eq(subjects.id, timetableEntries.subjectId))
     .where(eq(timetableEntries.teacherUserId, userId))
     .orderBy(timetableEntries.dayOfWeek, timetableEntries.period);
-  return { teacherName: profile?.displayName ?? user?.name ?? user?.username ?? "Teacher", teacherCode: profile?.teacherCode ?? null, entries };
+  const visibleEntries = entries.filter(row => {
+    const grade = row.grade?.name?.toLowerCase() ?? "";
+    const levelVisible = (enabledLevels.has("ECDE") && /^(pp|pre-primary)/i.test(grade)) || (enabledLevels.has("Primary") && /^grade [1-6]$/i.test(grade)) || (enabledLevels.has("Junior School") && /^grade [7-9]$/i.test(grade)) || (enabledLevels.has("Senior School") && /^grade (10|11|12)$/i.test(grade));
+    return levelVisible && (!row.subject || relevantAreas.has(row.subject.name.toLowerCase()));
+  });
+  return { teacherName: profile?.displayName ?? user?.name ?? user?.username ?? "Teacher", teacherCode: profile?.teacherCode ?? null, entries: visibleEntries };
 }
 
 export async function listTeacherCodes() {
@@ -605,6 +619,37 @@ export async function generateAutomaticTimetable(input: { academicYear?: number;
   }
   await writeAudit(userId, "timetable.generate.automatic", "timetable", null, { academicYear, placed, unplaced, regenerate: input.regenerate });
   return { placed, unplaced, regenerated: input.regenerate, requirements: requirements.length, slots: days * periodsPerDay };
+}
+
+export async function getIntegratedReportCard(input: { learnerId: number; academicYear?: number; term?: string }, userId: number) {
+  const db = await requireDb();
+  const settings = await getSettings(); const academicYear = input.academicYear ?? settings.academicYear; const term = input.term ?? settings.currentTerm;
+  const learnerRow = (await db.select({ learner: learners, grade: grades }).from(learners).leftJoin(grades, eq(grades.id, learners.gradeId)).where(eq(learners.id, input.learnerId)).limit(1))[0];
+  if (!learnerRow) throw new Error("LEARNER_NOT_FOUND");
+  const actor = (await db.select({ role: users.role }).from(users).where(eq(users.id, userId)).limit(1))[0];
+  if (actor?.role === "user") {
+    const allowed = await db.select().from(teacherAllocations).where(and(eq(teacherAllocations.teacherUserId, userId), eq(teacherAllocations.gradeId, learnerRow.learner.gradeId), eq(teacherAllocations.status, "active"))).limit(1);
+    if (!allowed.length) throw new Error("REPORT_SCOPE_FORBIDDEN");
+  }
+  const markRows = await db.select({ mark: marks, assessment: assessments, subject: subjects }).from(marks).innerJoin(assessments, eq(assessments.id, marks.assessmentId)).innerJoin(subjects, eq(subjects.id, marks.subjectId)).where(eq(marks.learnerId, input.learnerId));
+  const valid = markRows.filter(row => row.assessment.academicYear === academicYear && row.assessment.term === term && row.assessment.gradeId === learnerRow.learner.gradeId).sort((a,b) => b.assessment.id - a.assessment.id);
+  const approved = valid.filter(row => row.assessment.status === "approved"); const source = approved.length ? approved : valid;
+  const seen = new Set<number>(); const marksheet = source.filter(row => { if (seen.has(row.mark.subjectId)) return false; seen.add(row.mark.subjectId); return true; }).map(row => ({ subject: row.subject, midTerm: Number(row.mark.midTerm), endTerm: Number(row.mark.endTerm), average: Number(row.mark.average), cbcLevel: row.mark.cbcLevel, teacherRemark: row.mark.teacherRemark, assessmentStatus: row.assessment.status }));
+  const attendanceRows = await db.select().from(attendances).where(eq(attendances.learnerId, input.learnerId));
+  const present = attendanceRows.filter(row => row.status === "present" || row.status === "late").length; const absent = attendanceRows.filter(row => row.status === "absent").length;
+  const allocationRows = await db.select({ allocation: teacherAllocations, staff: staffProfiles }).from(teacherAllocations).leftJoin(staffProfiles, eq(staffProfiles.userId, teacherAllocations.teacherUserId)).where(and(eq(teacherAllocations.gradeId, learnerRow.learner.gradeId), eq(teacherAllocations.status, "active")));
+  const classTeacher = learnerRow.grade?.classTeacherUserId ? (await db.select().from(staffProfiles).where(eq(staffProfiles.userId, learnerRow.grade.classTeacherUserId)).limit(1))[0]?.displayName : null;
+  const fees = settings.includeFeesOnReportCard ? await getFinanceOverview(input.learnerId) : null;
+  const existing = (await db.select().from(reportCards).where(and(eq(reportCards.learnerId, input.learnerId), eq(reportCards.academicYear, academicYear), eq(reportCards.term, term))).limit(1))[0];
+  if (!existing) await db.insert(reportCards).values({ learnerId: input.learnerId, academicYear, term, status: "draft", generatedByUserId: userId }).onDuplicateKeyUpdate({ set: { updatedAt: new Date() } });
+  const record = (await db.select().from(reportCards).where(and(eq(reportCards.learnerId, input.learnerId), eq(reportCards.academicYear, academicYear), eq(reportCards.term, term))).limit(1))[0];
+  const levels = marksheet.map(row => row.cbcLevel).filter((level): level is NonNullable<typeof level> => level !== null);
+  const overall = levels.length ? (levels.filter(level => level.startsWith("EE")).length >= Math.ceil(levels.length / 2) ? "EE" : levels.filter(level => level.startsWith("ME")).length >= Math.ceil(levels.length / 2) ? "ME" : levels.filter(level => level.startsWith("BE")).length >= Math.ceil(levels.length / 2) ? "BE" : "AE") : null;
+  return { learner: learnerRow.learner, grade: learnerRow.grade, settings, academicYear, term, marksheet, attendance: { openingDays: attendanceRows.length, present, absent, percentage: attendanceRows.length ? Math.round((present / attendanceRows.length) * 100) : 0 }, classTeacher, allocations: allocationRows, finance: fees, report: record, overall };
+}
+
+export async function saveReportCardComments(input: { learnerId: number; academicYear: number; term: string; assessmentType?: "mid_term" | "end_term"; classTeacherComment?: string | null; headTeacherComment?: string | null }, userId: number) {
+  const db = await requireDb(); await db.insert(reportCards).values({ ...input, assessmentType: input.assessmentType ?? "end_term", status: "draft", generatedByUserId: userId }).onDuplicateKeyUpdate({ set: { classTeacherComment: input.classTeacherComment ?? null, headTeacherComment: input.headTeacherComment ?? null } }); await writeAudit(userId, "report_card.comments.save", "report_card", `${input.learnerId}:${input.academicYear}:${input.term}:${input.assessmentType ?? "end_term"}`, input); return { ok: true };
 }
 
 export async function setReportCardStatus(input: { learnerId: number; academicYear: number; term: string; assessmentType?: "mid_term" | "end_term"; status: "draft" | "generated" | "reviewed" | "approved" | "published" }, userId: number) {
@@ -701,6 +746,16 @@ function textValue(row: PeopleImportRow, key: string) {
   const value = row[key]; return value == null ? "" : String(value).trim();
 }
 
+function normalizedImportKey(value: string) {
+  return value.replace(/[^a-z0-9]/gi, "").toLowerCase();
+}
+
+function importTextValue(row: PeopleImportRow, ...keys: string[]) {
+  const wanted = new Set(keys.map(normalizedImportKey));
+  const found = Object.entries(row).find(([key, value]) => wanted.has(normalizedImportKey(key)) && value != null && String(value).trim() !== "");
+  return found ? String(found[1]).trim() : "";
+}
+
 export async function previewPeopleImport(input: { kind: PeopleImportKind; rows: PeopleImportRow[] }) {
   const db = await requireDb();
   const errors: Array<{ row: number; message: string }> = [];
@@ -708,38 +763,47 @@ export async function previewPeopleImport(input: { kind: PeopleImportKind; rows:
   if (!input.rows.length) return { kind: input.kind, total: 0, valid: 0, errors: [{ row: 0, message: "The workbook contains no data rows." }], preview };
   if (input.rows.length > 500) return { kind: input.kind, total: input.rows.length, valid: 0, errors: [{ row: 0, message: "Import limit is 500 rows per confirmation." }], preview };
   const gradeRows = await db.select().from(grades);
+  const gradeByKey = new Map(gradeRows.map(item => [`${item.name.toLowerCase()}|${(item.stream ?? "").toLowerCase()}`, item]));
+  const existingAdmissions = new Set<string>();
+  if (input.kind === "learners") {
+    const admissionNumbers = input.rows.map(row => importTextValue(row, "admissionNumber", "admissionNo", "admission").toUpperCase()).filter(Boolean);
+    if (admissionNumbers.length) {
+      const existing = await db.select({ admissionNumber: learners.admissionNumber }).from(learners).where(inArray(learners.admissionNumber, admissionNumbers));
+      existing.forEach(row => existingAdmissions.add(row.admissionNumber.toUpperCase()));
+    }
+  }
   const seenAdmissions = new Set<string>();
   for (let index = 0; index < input.rows.length; index += 1) {
     const row = input.rows[index];
     const rowNumber = index + 2;
     if (input.kind === "learners") {
-      const fullName = textValue(row, "learnerName") || textValue(row, "fullName");
-      const admissionNumber = (textValue(row, "admissionNumber") || textValue(row, "admissionNo")).toUpperCase();
-      const gradeName = textValue(row, "gradeName") || textValue(row, "grade");
-      const stream = textValue(row, "stream");
-      const grade = gradeRows.find(item => item.name.toLowerCase() === gradeName.toLowerCase() && (!stream || (item.stream ?? "").toLowerCase() === stream.toLowerCase()));
-      const rawStatus = textValue(row, "status").toLowerCase();
+      const fullName = importTextValue(row, "learnerName", "fullName", "name");
+      const admissionNumber = importTextValue(row, "admissionNumber", "admissionNo", "admission").toUpperCase();
+      const gradeName = importTextValue(row, "gradeName", "grade", "class", "gradeClass");
+      const stream = importTextValue(row, "stream", "streamName");
+      const grade = gradeByKey.get(`${gradeName.toLowerCase()}|${stream.toLowerCase()}`) ?? (!stream ? gradeRows.find(item => item.name.toLowerCase() === gradeName.toLowerCase()) : undefined);
+      const rawStatus = importTextValue(row, "status", "state").toLowerCase();
       const status = rawStatus === "inactive" ? "inactive" : "active";
       if (rawStatus && rawStatus !== "active" && rawStatus !== "inactive") errors.push({ row: rowNumber, message: "Status must be active or inactive." });
       if (!fullName) errors.push({ row: rowNumber, message: "Learner name is required." });
       if (!admissionNumber) errors.push({ row: rowNumber, message: "Admission number is required." });
       if (seenAdmissions.has(admissionNumber)) errors.push({ row: rowNumber, message: `Duplicate admission number in workbook: ${admissionNumber}.` });
-      if (admissionNumber && (await db.select({ id: learners.id }).from(learners).where(eq(learners.admissionNumber, admissionNumber)).limit(1)).length) errors.push({ row: rowNumber, message: `Admission number already exists: ${admissionNumber}.` });
+      if (admissionNumber && existingAdmissions.has(admissionNumber)) errors.push({ row: rowNumber, message: `Admission number already exists: ${admissionNumber}.` });
       if (!grade) errors.push({ row: rowNumber, message: `Grade/class not found: ${gradeName}${stream ? ` ${stream}` : ""}.` });
       seenAdmissions.add(admissionNumber);
-      if (fullName && admissionNumber && grade) preview.push({ row: rowNumber, learnerName: fullName, admissionNumber, gradeId: grade.id, grade: `${grade.name}${grade.stream ? ` ${grade.stream}` : ""}`, guardianName: textValue(row, "guardianName") || textValue(row, "parentGuardianName") || null, guardianIdNumber: textValue(row, "guardianIdNumber") || textValue(row, "parentGuardianId") || null, guardianPhone: textValue(row, "guardianPhone") || textValue(row, "parentGuardianPhone") || null, status });
+      if (fullName && admissionNumber && grade) preview.push({ row: rowNumber, learnerName: fullName, admissionNumber, gradeId: grade.id, grade: `${grade.name}${grade.stream ? ` ${grade.stream}` : ""}`, guardianName: importTextValue(row, "guardianName", "parentGuardianName", "parentName", "guardian") || null, guardianIdNumber: importTextValue(row, "guardianIdNumber", "parentGuardianId", "parentId", "guardianId") || null, guardianPhone: importTextValue(row, "guardianPhone", "parentGuardianPhone", "parentPhone", "guardianPhoneNumber") || null, status });
     } else {
-      const displayName = textValue(row, "staffName") || textValue(row, "displayName") || textValue(row, "name");
-      const role = (textValue(row, "role") || "teacher") as PeopleStaffRole;
+      const displayName = importTextValue(row, "staffName", "displayName", "name", "teacherName");
+      const role = (importTextValue(row, "role", "systemRole", "designationRole") || "teacher") as PeopleStaffRole;
       const allowedRoles: PeopleStaffRole[] = ["teacher", "class_teacher", "senior_teacher", "deputy_head", "head_teacher", "finance", "storekeeper", "other"];
       if (!displayName) errors.push({ row: rowNumber, message: "Staff name is required." });
       if (!allowedRoles.includes(role)) errors.push({ row: rowNumber, message: `Unknown staff role: ${role}.` });
-      const rawStatus = textValue(row, "status").toLowerCase();
-      const email = textValue(row, "email");
+      const rawStatus = importTextValue(row, "status", "state").toLowerCase();
+      const email = importTextValue(row, "email", "emailAddress");
       const status = rawStatus === "inactive" ? "inactive" : "active";
       if (rawStatus && rawStatus !== "active" && rawStatus !== "inactive") errors.push({ row: rowNumber, message: "Status must be active or inactive." });
       if (email && !/^\S+@\S+\.\S+$/.test(email)) errors.push({ row: rowNumber, message: "Email format is invalid." });
-      if (displayName && allowedRoles.includes(role)) preview.push({ row: rowNumber, displayName, title: textValue(row, "title") || null, designation: textValue(row, "designation") || textValue(row, "roleLabel") || null, phone: textValue(row, "phone") || null, email: email || null, role, status });
+      if (displayName && allowedRoles.includes(role)) preview.push({ row: rowNumber, displayName, title: importTextValue(row, "title") || null, designation: importTextValue(row, "designation", "roleLabel", "jobTitle") || null, phone: importTextValue(row, "phone", "phoneNumber", "mobile") || null, email: email || null, role, status });
     }
   }
   return { kind: input.kind, total: input.rows.length, valid: preview.length, errors, preview };
@@ -749,16 +813,79 @@ export async function importPeopleRows(input: { kind: PeopleImportKind; rows: Pe
   const checked = await previewPeopleImport(input);
   if (checked.errors.length) throw new Error(`IMPORT_VALIDATION_FAILED:${JSON.stringify(checked.errors.slice(0, 10))}`);
   let created = 0;
+  const learnerIds: number[] = [];
+  const staffProfileIds: number[] = [];
+  const userIds: number[] = [];
   for (const row of checked.preview as Array<Record<string, unknown>>) {
     if (input.kind === "learners") {
-      await createLearner({ fullName: String(row.learnerName), admissionNumber: String(row.admissionNumber), guardianName: row.guardianName ? String(row.guardianName) : null, guardianIdNumber: row.guardianIdNumber ? String(row.guardianIdNumber) : null, guardianPhone: row.guardianPhone ? String(row.guardianPhone) : null, gradeId: Number(row.gradeId), status: row.status === "inactive" ? "inactive" : "active" }, userId);
+      const createdLearner = await createLearner({ fullName: String(row.learnerName), admissionNumber: String(row.admissionNumber), guardianName: row.guardianName ? String(row.guardianName) : null, guardianIdNumber: row.guardianIdNumber ? String(row.guardianIdNumber) : null, guardianPhone: row.guardianPhone ? String(row.guardianPhone) : null, gradeId: Number(row.gradeId), status: row.status === "inactive" ? "inactive" : "active" }, userId);
+      learnerIds.push(createdLearner.id);
     } else {
-      await createStaff({ displayName: String(row.displayName), title: row.title ? String(row.title) : null, designation: row.designation ? String(row.designation) : null, phone: row.phone ? String(row.phone) : null, email: row.email ? String(row.email) : null, role: String(row.role) as PeopleStaffRole, status: row.status === "inactive" ? "inactive" : "active" }, userId);
+      const createdStaff = await createStaff({ displayName: String(row.displayName), title: row.title ? String(row.title) : null, designation: row.designation ? String(row.designation) : null, phone: row.phone ? String(row.phone) : null, email: row.email ? String(row.email) : null, role: String(row.role) as PeopleStaffRole, status: row.status === "inactive" ? "inactive" : "active" }, userId);
+      staffProfileIds.push(createdStaff.id); userIds.push(createdStaff.userId);
     }
     created += 1;
   }
-  await writeAudit(userId, "people.bulk_import", input.kind, null, { rows: created });
+  await writeAudit(userId, "people.bulk_import", input.kind, null, { rows: created, learnerIds, staffProfileIds, userIds, undoable: true });
   return { ok: true, created };
+}
+
+type ImportBatch = { auditId: number; kind: PeopleImportKind; createdAt: Date; rows: number; learnerIds: number[]; staffProfileIds: number[]; userIds: number[] };
+export const PEOPLE_IMPORT_UNDO_WINDOW_MS = 60 * 60 * 1000;
+export function isPeopleImportUndoable(createdAt: Date, now = Date.now()) { return now - createdAt.getTime() <= PEOPLE_IMPORT_UNDO_WINDOW_MS; }
+
+function parseImportBatch(row: typeof auditLogs.$inferSelect): ImportBatch | null {
+  if (row.action !== "people.bulk_import" || !row.entityType || !["learners", "staff"].includes(row.entityType)) return null;
+  try {
+    const metadata = JSON.parse(row.metadata ?? "{}") as Record<string, unknown>;
+    if (metadata.undoable !== true) return null;
+    return { auditId: row.id, kind: row.entityType as PeopleImportKind, createdAt: row.createdAt, rows: Number(metadata.rows ?? 0), learnerIds: Array.isArray(metadata.learnerIds) ? metadata.learnerIds.map(Number).filter(Number.isInteger) : [], staffProfileIds: Array.isArray(metadata.staffProfileIds) ? metadata.staffProfileIds.map(Number).filter(Number.isInteger) : [], userIds: Array.isArray(metadata.userIds) ? metadata.userIds.map(Number).filter(Number.isInteger) : [] };
+  } catch { return null; }
+}
+
+export async function getLastPeopleImport() {
+  const db = await requireDb();
+  const rows = await db.select().from(auditLogs).where(eq(auditLogs.action, "people.bulk_import")).orderBy(desc(auditLogs.createdAt)).limit(20);
+  const batch = rows.map(parseImportBatch).find((item): item is ImportBatch => item !== null && isPeopleImportUndoable(item.createdAt));
+  return batch ? { ...batch, createdAt: batch.createdAt.toISOString() } : null;
+}
+
+export async function undoLastPeopleImport(userId: number) {
+  const db = await requireDb();
+  const rows = await db.select().from(auditLogs).where(eq(auditLogs.action, "people.bulk_import")).orderBy(desc(auditLogs.createdAt)).limit(20);
+  const batch = rows.map(parseImportBatch).find((item): item is ImportBatch => item !== null && isPeopleImportUndoable(item.createdAt));
+  if (!batch) throw new Error("NO_UNDOABLE_IMPORT");
+  const blockedLearners: number[] = [];
+  const blockedStaff: number[] = [];
+  for (const learnerId of batch.learnerIds) {
+    const [markRows, attendanceRows, paymentRows] = await Promise.all([
+      db.select({ id: marks.id }).from(marks).where(eq(marks.learnerId, learnerId)).limit(1),
+      db.select({ id: attendances.id }).from(attendances).where(eq(attendances.learnerId, learnerId)).limit(1),
+      db.select({ id: payments.id }).from(payments).where(eq(payments.learnerId, learnerId)).limit(1),
+    ]);
+    if (markRows.length || attendanceRows.length || paymentRows.length) blockedLearners.push(learnerId);
+  }
+  for (const staffProfileId of batch.staffProfileIds) {
+    const profile = (await db.select({ userId: staffProfiles.userId }).from(staffProfiles).where(eq(staffProfiles.id, staffProfileId)).limit(1))[0];
+    if (!profile) continue;
+    const [timetableRows, allocationRows, assessmentRows, markRows] = await Promise.all([
+      db.select({ id: timetableEntries.id }).from(timetableEntries).where(eq(timetableEntries.teacherUserId, profile.userId)).limit(1),
+      db.select({ id: teacherAllocations.id }).from(teacherAllocations).where(eq(teacherAllocations.teacherUserId, profile.userId)).limit(1),
+      db.select({ id: assessments.id }).from(assessments).where(eq(assessments.teacherUserId, profile.userId)).limit(1),
+      db.select({ id: marks.id }).from(marks).where(eq(marks.teacherUserId, profile.userId)).limit(1),
+    ]);
+    if (timetableRows.length || allocationRows.length || assessmentRows.length || markRows.length) blockedStaff.push(staffProfileId);
+  }
+  if (blockedLearners.length || blockedStaff.length) throw new Error(`IMPORT_UNDO_BLOCKED:${JSON.stringify({ learners: blockedLearners.length, staff: blockedStaff.length })}`);
+  await db.transaction(async tx => {
+    if (batch.learnerIds.length) { await tx.delete(learnerGuardians).where(inArray(learnerGuardians.learnerId, batch.learnerIds)); await tx.delete(learners).where(inArray(learners.id, batch.learnerIds)); }
+    if (batch.staffProfileIds.length) await tx.delete(staffProfiles).where(inArray(staffProfiles.id, batch.staffProfileIds));
+    if (batch.userIds.length) await tx.delete(userPermissions).where(inArray(userPermissions.userId, batch.userIds));
+    if (batch.userIds.length) await tx.delete(users).where(inArray(users.id, batch.userIds));
+  });
+  await db.update(auditLogs).set({ metadata: JSON.stringify({ rows: batch.rows, learnerIds: batch.learnerIds, staffProfileIds: batch.staffProfileIds, userIds: batch.userIds, undoable: false, undoneAt: new Date().toISOString() }) }).where(eq(auditLogs.id, batch.auditId));
+  await writeAudit(userId, "people.bulk_import.undo", batch.kind, String(batch.auditId), { rows: batch.rows, learnerIds: batch.learnerIds, staffProfileIds: batch.staffProfileIds, userIds: batch.userIds });
+  return { ok: true, kind: batch.kind, rows: batch.rows };
 }
 
 export type StaffRole = "teacher" | "class_teacher" | "senior_teacher" | "deputy_head" | "head_teacher" | "finance" | "storekeeper" | "other";
@@ -774,8 +901,31 @@ export async function updateStaffRole(input: { staffProfileId: number; role: Sta
 
 export async function listAcademicCatalog() {
   const db = await requireDb();
-  const [gradeRows, subjectRows] = await Promise.all([db.select().from(grades).orderBy(grades.name, grades.stream), db.select().from(subjects).orderBy(subjects.name)]);
-  return { grades: gradeRows, subjects: subjectRows };
+  const [allGradeRows, existingSubjects, settings] = await Promise.all([db.select().from(grades).orderBy(grades.name, grades.stream), db.select().from(subjects).orderBy(subjects.name), db.select({ enabledSchoolLevels: schoolSettings.enabledSchoolLevels }).from(schoolSettings).limit(1)]);
+  const enabledLevels = new Set((settings[0]?.enabledSchoolLevels || "ECDE,Primary,Junior School,Senior School").split(","));
+  const existingNames = new Set(existingSubjects.map(subject => subject.name.toLowerCase()));
+  const existingCodes = new Set(existingSubjects.map(subject => subject.code.toLowerCase()));
+  const missing = Array.from(new Set(curriculumCatalogue().map(row => row.area))).filter(name => !existingNames.has(name.toLowerCase())).map((name, index) => {
+    const stem = `CBC-${name.toUpperCase().replace(/[^A-Z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 24) || `AREA-${index + 1}`}`;
+    let code = stem; let suffix = 2;
+    while (existingCodes.has(code.toLowerCase())) code = `${stem.slice(0, 27 - String(suffix).length)}-${suffix++}`;
+    existingCodes.add(code.toLowerCase()); existingNames.add(name.toLowerCase());
+    return { name, code };
+  });
+  if (missing.length) await db.insert(subjects).values(missing);
+  const subjectRows = missing.length ? await db.select().from(subjects).orderBy(subjects.name) : existingSubjects;
+  const relevantAreas = new Set(curriculumCatalogue().filter(row => enabledLevels.has(row.level)).map(row => row.area.toLowerCase()));
+  const gradeRows = allGradeRows.filter(row => {
+    const name = row.name.toLowerCase();
+    return (enabledLevels.has("ECDE") && /^(pp|pre-primary)/i.test(name)) || (enabledLevels.has("Primary") && /^grade [1-6]$/i.test(name)) || (enabledLevels.has("Junior School") && /^grade [7-9]$/i.test(name)) || (enabledLevels.has("Senior School") && /^grade (10|11|12)$/i.test(name));
+  });
+  return { grades: gradeRows, subjects: subjectRows.filter(subject => relevantAreas.has(subject.name.toLowerCase())) };
+}
+
+export async function canManageSchoolLevels(userId: number) {
+  const db = await requireDb();
+  const profile = (await db.select({ role: staffProfiles.role }).from(staffProfiles).where(eq(staffProfiles.userId, userId)).limit(1))[0];
+  return profile?.role === "super_admin";
 }
 
 export async function createGradeClass(input: { name: string; stream?: string | null }, userId: number) {
@@ -863,4 +1013,13 @@ export async function saveSettings(input: { schoolName: string; motto?: string |
 export async function listAuditLogs() {
   const db = await requireDb();
   return db.select().from(auditLogs).orderBy(desc(auditLogs.createdAt)).limit(100);
+}
+
+export async function getReportCard(learnerId: number) {
+  const db = await requireDb();
+  const learnerRow = (await db.select({ learner: learners, grade: grades }).from(learners).leftJoin(grades, eq(grades.id, learners.gradeId)).where(eq(learners.id, learnerId)).limit(1))[0];
+  if (!learnerRow) throw new Error("LEARNER_NOT_FOUND");
+  const markRows = await db.select({ mark: marks, subject: subjects, assessment: assessments }).from(marks).innerJoin(subjects, eq(subjects.id, marks.subjectId)).innerJoin(assessments, eq(assessments.id, marks.assessmentId)).where(eq(marks.learnerId, learnerId));
+  const finance = await getFinanceOverview(learnerId);
+  return { learner: learnerRow.learner, grade: learnerRow.grade, marks: markRows, finance: finance.balances[0] ?? null, settings: await getSettings() };
 }

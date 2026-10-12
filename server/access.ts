@@ -7,7 +7,7 @@ export const MODULES = [
   ["dashboard", "Dashboard"], ["learners", "Learners"], ["attendance", "Attendance"], ["assessments", "Assessments"],
   ["marklists", "Marklists"], ["report_cards", "Report Cards"], ["finance", "Finance & Resources"], ["store", "Store"],
   ["timetable", "Timetable"], ["allocations", "Teacher Allocations"], ["administration", "Administration"],
-  ["communication", "Communications"], ["alumni", "Alumni"], ["ai", "NEXUS AI"], ["reports", "Reports"], ["settings", "Settings"],
+  ["communication", "Communications"], ["alumni", "Alumni"], ["library", "Library"], ["ai", "NEXUS AI"], ["reports", "Reports"], ["settings", "Settings"],
 ] as const;
 export const ACTIONS = ["view", "create", "edit", "delete", "approve", "export"] as const;
 export const MANAGE_PERMISSIONS = "administration.manage_permissions";
