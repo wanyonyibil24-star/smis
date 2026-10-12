@@ -81,7 +81,7 @@ function PersonalSchedule({ schoolName }: { schoolName: string }) {
   </div>;
 }
 
-function MasterSchedule({ schoolName, onOpenMaster }: { schoolName: string; onOpenMaster: () => void }) {
+function MasterSchedule({ schoolName, onOpenMaster, canEdit }: { schoolName: string; onOpenMaster: () => void; canEdit: boolean }) {
   const master = trpc.smis.timetable.masterList.useQuery();
   const entries = useMemo(() => (master.data ?? []) as ScheduleRow[], [master.data]);
   const gradeRows: Array<{ level: number; gradeId: number | null; label: string }> = [];
@@ -98,14 +98,14 @@ function MasterSchedule({ schoolName, onOpenMaster }: { schoolName: string; onOp
       <PeriodCells entries={entries} day={dayIndex + 1} gradeId={grade.gradeId ?? undefined} multiGrade breakRowSpan={gradeRows.length} firstRow={gradeIndex === 0} />
     </tr>))}</tbody></table></div>}
     {!master.isLoading && entries.length === 0 && <p className="mt-2 text-center text-xs text-[#718077]">No master timetable entries are available yet.</p>}
-    <div className="mt-2 flex justify-end print:hidden"><button type="button" onClick={onOpenMaster} className="text-xs font-bold text-[#1d6a57] underline underline-offset-4">Open timetable generator</button></div>
+    {canEdit && <div className="mt-2 flex justify-end print:hidden"><button type="button" onClick={onOpenMaster} className="text-xs font-bold text-[#1d6a57] underline underline-offset-4">Open timetable generator</button></div>}
   </div>;
 }
 
-export function TimetableDashboard({ schoolName, isMasterAdmin, canViewMaster, onOpenMaster }: { schoolName: string; isMasterAdmin: boolean; canViewMaster: boolean; onOpenMaster: () => void }) {
-  const [view, setView] = useState<"personal" | "master">("personal");
+export function TimetableDashboard({ schoolName, isMasterAdmin, canViewPersonal, canViewMaster, onOpenMaster }: { schoolName: string; isMasterAdmin: boolean; canViewPersonal: boolean; canViewMaster: boolean; onOpenMaster: () => void }) {
+  const [view, setView] = useState<"personal" | "master">(() => canViewMaster && !canViewPersonal ? "master" : "personal");
   return <section className="page-enter space-y-4">
-    {canViewMaster && <div className="flex flex-wrap items-center justify-between gap-3"><div><p className="eyebrow">School day · weekly schedule</p><h2 className="font-editorial text-2xl text-[#193d32]">Your timetables</h2><p className="mt-1 text-xs text-[#718077]">Class teachers can review the published master timetable; only timetable administrators can edit it.</p></div><div className="flex gap-2 rounded-lg border border-[#dedbd1] bg-[#fffefa] p-1 print:hidden"><button type="button" onClick={() => setView("personal")} aria-pressed={view === "personal"} className={`rounded-md px-3 py-2 text-xs font-bold ${view === "personal" ? "bg-[#1d6a57] text-white" : "text-[#53675d]"}`}>Personal timetable</button><button type="button" onClick={() => setView("master")} aria-pressed={view === "master"} className={`rounded-md px-3 py-2 text-xs font-bold ${view === "master" ? "bg-[#1d6a57] text-white" : "text-[#53675d]"}`}>Master timetable</button></div></div>}
-    {view === "personal" || !canViewMaster ? <PersonalSchedule schoolName={schoolName} /> : <MasterSchedule schoolName={schoolName} onOpenMaster={onOpenMaster} />}
+    {canViewMaster && <div className="flex flex-wrap items-center justify-between gap-3"><div><p className="eyebrow">School day · weekly schedule</p><h2 className="font-editorial text-2xl text-[#193d32]">Your timetables</h2><p className="mt-1 text-xs text-[#718077]">Class teachers can review the published master timetable; only timetable administrators can edit it.</p></div><div className="flex gap-2 rounded-lg border border-[#dedbd1] bg-[#fffefa] p-1 print:hidden">{canViewPersonal && <button type="button" onClick={() => setView("personal")} aria-pressed={view === "personal"} className={`rounded-md px-3 py-2 text-xs font-bold ${view === "personal" ? "bg-[#1d6a57] text-white" : "text-[#53675d]"}`}>Personal timetable</button>}{canViewMaster && <button type="button" onClick={() => setView("master")} aria-pressed={view === "master"} className={`rounded-md px-3 py-2 text-xs font-bold ${view === "master" ? "bg-[#1d6a57] text-white" : "text-[#53675d]"}`}>Master timetable</button>}</div></div>}
+    {view === "personal" && canViewPersonal ? <PersonalSchedule schoolName={schoolName} /> : canViewMaster ? <MasterSchedule schoolName={schoolName} onOpenMaster={onOpenMaster} canEdit={isMasterAdmin} /> : <p className="rounded-xl bg-white p-5 text-sm text-[#718077]">No timetable view is available for this account.</p>}
   </section>;
 }

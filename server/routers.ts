@@ -5,6 +5,7 @@ import { systemRouter } from "./_core/systemRouter";
 import { adminProcedure, protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { MANAGE_PERMISSIONS } from "./access";
+import { getDashboardSnapshot } from "./dashboard";
 import { AdminError, AUDIT_MODULES, adminCatalog, adminOverview, changeAdminAssignment, changeAdminRole, createAdminUser, getAdminUser, getPermissionMatrixView, listAdminUsers, listAuditTrail, resetAdminPassword, setAccountState, setRolePermission, setUserPermissionOverride, updateAdminUser } from "./administration";
 import { correctLockedAssessmentMark, ensureAssessment, getAssessmentEntries, getAssessmentReportCard, getClassMarklist, listAssessmentScopes, saveAssessmentMarks, setAssessmentFinalState, submitAssessment } from "./assessment";
 import { adminResetIamPassword, changeIamPassword, loginWithIam, logoutIam, requestIamPasswordReset, resetIamPassword, safeAuthProfile } from "./iam";
@@ -24,12 +25,12 @@ import {
   getLastPeopleImport,
   getPersonalTimetable,
   canManageMasterTimetable,
-  getDashboardSnapshot,
   getFinanceOverview,
   getIntegratedReportCard,
   getReportCard,
   getSettings,
   getStoreOverview,
+  listStoreMovements,
   listAlumni,
   listAllocations,
   listAcademicCatalog,
@@ -145,7 +146,7 @@ export const appRouter = router({
   }),
   smis: router({
     health: publicProcedure.query(() => ({ ok: true, service: "kenyan-smis", persistence: "mysql-drizzle", modules: ["learners", "attendance", "assessments", "reports", "finance", "store", "timetable", "communication", "alumni", "users", "settings", "audit"] })),
-    snapshot: permissionProcedure("dashboard.view").query(() => getDashboardSnapshot()),
+    snapshot: permissionProcedure("dashboard.view").input(z.object({ days: z.union([z.literal(7), z.literal(30)]).optional(), academicYear: z.number().int().min(2000).max(2100).optional(), term: z.string().min(1).max(40).optional(), gradeId: z.number().int().positive().optional() }).default({})).query(({ input, ctx }) => getDashboardSnapshot(currentUserId(ctx.user), input)),
     learners: router({
       list: permissionProcedure("learners.view").input(z.object({ search: z.string().optional() }).optional()).query(({ input }) => listLearners(input?.search)),
       create: permissionProcedure("learners.add").input(z.object({ fullName: z.string().min(1).max(160), admissionNumber: z.string().min(1).max(40), guardianName: z.string().max(160).nullable().optional(), guardianIdNumber: z.string().max(40).nullable().optional(), guardianPhone: z.string().max(40).nullable().optional(), gradeId: z.number().int().positive(), status: z.enum(["active", "inactive"]) })).mutation(({ input, ctx }) => createLearner(input, currentUserId(ctx.user))),
@@ -211,6 +212,7 @@ export const appRouter = router({
     }),
     store: router({
       overview: permissionProcedure("store.view").query(() => getStoreOverview()),
+      movements: permissionProcedure("store.view").query(() => listStoreMovements()),
       recordMovement: permissionProcedure("store.edit").input(z.object({ itemId: z.number().int().positive(), movementType: z.enum(["received", "issued", "adjustment"]), quantity: z.number().positive(), reference: z.string().max(120).nullable().optional() })).mutation(({ input, ctx }) => recordStoreMovement(input, currentUserId(ctx.user))),
     }),
     timetable: router({

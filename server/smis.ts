@@ -99,47 +99,6 @@ export async function getSettings() {
   return row ?? { id: 0, schoolName: "Ebunangwe Junior School", motto: "Learn. Lead. Serve.", currentTerm: "Term 2", academicYear: 2026, includeFeesOnReportCard: 1, showPercentagesOnReportCard: 0, logoPath: null, principalSignaturePath: null, classTeacherSignaturePath: null };
 }
 
-export async function getDashboardSnapshot() {
-  const db = await requireDb();
-  const trendStart = new Date(); trendStart.setHours(0, 0, 0, 0); trendStart.setDate(trendStart.getDate() - 6);
-  const [settings, learnerRows, attendanceRows, trendRows, paymentRows, assessmentRows, staffRows, lowStockRows] = await Promise.all([
-    getSettings(),
-    db.select({ learner: learners, grade: grades }).from(learners).leftJoin(grades, eq(grades.id, learners.gradeId)).where(eq(learners.status, "active")),
-    db.select().from(attendances).orderBy(desc(attendances.id)).limit(100),
-    db.select({ attendanceDate: attendances.attendanceDate, status: attendances.status }).from(attendances).where(gte(attendances.attendanceDate, trendStart)),
-    db.select().from(payments).orderBy(desc(payments.paidAt)).limit(100),
-    db.select().from(assessments).where(sql`${assessments.status} <> 'approved'`),
-    db.select().from(staffProfiles).where(eq(staffProfiles.status, "active")),
-    db.select({ item: storeItems, movement: storeMovements }).from(storeItems).leftJoin(storeMovements, eq(storeItems.id, storeMovements.itemId)),
-  ]);
-  const attendanceToday = attendanceRows.filter(row => String(row.attendanceDate) === new Date().toISOString().slice(0, 10));
-  const present = attendanceToday.filter(row => row.status === "present").length;
-  const attendanceRate = attendanceToday.length ? Math.round((present / attendanceToday.length) * 1000) / 10 : 0;
-  const attendanceTrend = Array.from({ length: 7 }, (_, index) => { const date = new Date(trendStart); date.setDate(trendStart.getDate() + index); const label = date.toISOString().slice(0, 10); const rows = trendRows.filter(row => String(row.attendanceDate) === label); return { label, present: rows.filter(row => row.status === "present" || row.status === "late").length, absent: rows.filter(row => row.status === "absent").length }; });
-  const learnersById = new Map(learnerRows.map(row => [row.learner.id, row]));
-  const recentAttendance = attendanceToday.slice(0, 8).flatMap(attendance => {
-    const row = learnersById.get(attendance.learnerId);
-    return row ? [{ attendance, learner: row.learner, grade: row.grade }] : [];
-  });
-  const collections = paymentRows.reduce((sum, row) => sum + Number(row.amount), 0);
-  const stock = new Map<number, { name: string; unit: string; quantity: number; reorderLevel: number }>();
-  for (const row of lowStockRows) {
-    if (!row.item) continue;
-    const current = stock.get(row.item.id) ?? { name: row.item.name, unit: row.item.unit, quantity: 0, reorderLevel: Number(row.item.reorderLevel) };
-    if (row.movement) current.quantity += row.movement.movementType === "issued" ? -Number(row.movement.quantity) : Number(row.movement.quantity);
-    stock.set(row.item.id, current);
-  }
-  return {
-    school: settings,
-    counts: { learners: learnerRows.length, staff: staffRows.length, assessmentsPending: assessmentRows.length, collections },
-    attendance: { today: attendanceToday.length, present, rate: attendanceRate },
-    attendanceTrend,
-    recentAttendance,
-    lowStock: Array.from(stock.values()).filter(item => item.quantity <= item.reorderLevel),
-    recentLearners: learnerRows.slice(0, 8).map(row => ({ ...row.learner, grade: row.grade ? `${row.grade.name}${row.grade.stream ? ` ${row.grade.stream}` : ""}` : "" })),
-  };
-}
-
 export type LearnerStatus = "active" | "inactive";
 export type PeopleStaffStatus = "active" | "inactive";
 export type PeopleStaffRole = "teacher" | "class_teacher" | "senior_teacher" | "deputy_head" | "head_teacher" | "finance" | "storekeeper" | "other";
@@ -485,6 +444,13 @@ export async function getStoreOverview() {
     items.set(row.item.id, item);
   }
   return Array.from(items.values());
+}
+
+export async function listStoreMovements() {
+  const db = await requireDb();
+  return db.select({ id: storeMovements.id, itemId: storeMovements.itemId, item: storeItems.name, movementType: storeMovements.movementType, quantity: storeMovements.quantity, reference: storeMovements.reference, createdAt: storeMovements.createdAt })
+    .from(storeMovements).innerJoin(storeItems, eq(storeItems.id, storeMovements.itemId))
+    .orderBy(desc(storeMovements.createdAt), desc(storeMovements.id)).limit(100);
 }
 
 export async function recordStoreMovement(input: { itemId: number; movementType: "received" | "issued" | "adjustment"; quantity: number; reference?: string | null }, userId: number) {
